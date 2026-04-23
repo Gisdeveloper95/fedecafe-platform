@@ -1,36 +1,101 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# fedecafe-platform
 
-## Getting Started
+Plataforma web de administracion y seguimiento para la suite GIS de la
+Federacion Nacional de Cafeteros (Quindio). Backend + panel admin + API
+consumida por la app movil `rutas_app` (Flutter) y la herramienta de
+administracion de datos `rutas_builder` (Python / PySide6).
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Frontend + API**: [Next.js 16](https://nextjs.org) (App Router) + TypeScript
+- **Base de datos**: [Turso](https://turso.tech) (SQLite distribuido, edge)
+- **ORM**: [Drizzle](https://orm.drizzle.team)
+- **Auth**: sesion cookie httpOnly (web) + JWT access/refresh (mobile)
+- **Docx server-side**: [docx](https://docx.js.org/) para generar reportes de
+  recorridos
+- **Hosting**: [Vercel](https://vercel.com)
+
+## Arquitectura de auth
+
+| Canal | Mecanismo | TTL |
+|---|---|---|
+| Web (admin) | Cookie httpOnly + sesion en `web_sessions` | 30 dias |
+| Mobile (operario) | JWT access + refresh con rotacion | 1 h / 180 d |
+
+Las dos capas comparten la misma tabla `users`. Los operarios usan la app
+movil con refresh token persistido en `flutter_secure_storage`; pueden abrir
+sesion en campo sin internet mientras el refresh siga vigente.
+
+## Modelo de datos
+
+10 tablas principales:
+
+- `users`, `sessions` (mobile), `web_sessions`, `audit_log`
+- `medidores` (PK `contrato`), `estructuras` (PK `codigo`)
+- `rutas`, `ruta_items`
+- `recorridos`, `recorrido_puntos`
+
+## Endpoints principales
+
+```
+POST /api/auth/login              (web y mobile)
+POST /api/auth/refresh
+POST /api/auth/logout
+GET  /api/me
+
+GET/POST/PATCH/DELETE /api/users            (admin)
+POST /api/users/:id/password                 (self o admin)
+
+POST /api/sync/medidores                     (admin, bulk upsert desde rutas_builder)
+POST /api/sync/estructuras
+GET  /api/medidores
+GET  /api/estructuras
+
+GET/POST       /api/rutas                    (admin crea, operario lee sus rutas)
+GET/PATCH/DEL  /api/rutas/:id
+PATCH          /api/rutas/:id/items/:codigo  (marcar visitado)
+
+GET/POST       /api/recorridos               (operario sube tracking)
+GET            /api/recorridos/:id
+GET            /api/recorridos/:id/reporte   (descarga Word server-side)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Variables de entorno
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Ver [`.env.example`](./.env.example). En produccion viven en Vercel Project
+Settings.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Desarrollo local
 
-## Learn More
+```bash
+npm install
+cp .env.example .env.local   # rellenar con creds Turso
+npx drizzle-kit push --force # aplica schema
+npx tsx scripts/seed-admin.ts # crea admin/admin123
+npm run dev
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Smoke tests
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Contra el servidor corriendo (local o Vercel):
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+BASE=http://localhost:3000 bash scripts/smoke-test.sh   # 18 checks API
+BASE=http://localhost:3000 bash scripts/smoke-ui.sh     # 13 checks UI
+```
 
-## Deploy on Vercel
+## Deploy
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- **URL prod**: https://fedecafe-platform.vercel.app
+- Deploy automatico en cada push a `main`
+- Conectado al repositorio [Gisdeveloper95/fedecafe-platform](https://github.com/Gisdeveloper95/fedecafe-platform)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Apps relacionadas
+
+- [`rutas_app`](../rutas_app): app movil Flutter (Android + Windows desktop)
+  consume esta API.
+- [`rutas_builder`](../rutas_builder): herramienta Python de preparacion de
+  datos GIS; tiene item de menu `Archivo > Sincronizar con la web` que POSTea
+  medidores/estructuras a `/api/sync/*`.
+- [`compilador_apks`](../compilador_apks): GUI PyQt6 para compilar APK/EXE
+  inyectando `API_BASE` como `--dart-define`.
