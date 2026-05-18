@@ -12,7 +12,7 @@ import { env } from "@/lib/env";
 import {
   renderCredentialsEmail,
   sendEmail,
-} from "@/lib/email/resend";
+} from "@/lib/email/mailer";
 
 const CreateUserRequest = z.object({
   username: z.string().min(3).max(50).regex(/^[a-z0-9._-]+$/i),

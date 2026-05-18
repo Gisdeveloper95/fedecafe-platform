@@ -6,7 +6,7 @@ import { logAudit } from "@/lib/audit";
 import { json, jsonError, parseJson } from "@/lib/api/json";
 import { requireAdmin } from "@/lib/auth/principal";
 import { createUniqueDemoCode } from "@/lib/auth/demo-tokens";
-import { renderDemoTokenEmail, sendEmail } from "@/lib/email/resend";
+import { renderDemoTokenEmail, sendEmail } from "@/lib/email/mailer";
 
 const CreateDemoTokenRequest = z.object({
   label: z.string().min(1).max(120).optional(),

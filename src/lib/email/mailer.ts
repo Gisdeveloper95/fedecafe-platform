@@ -1,8 +1,10 @@
+import nodemailer from "nodemailer";
+
 import { env } from "@/lib/env";
 
-// Cliente mínimo para Resend sin SDK (evita una dependencia extra).
-// Si RESEND_API_KEY no está configurado, los emails se loguean en consola y se
-// reportan como "queued" para que el sistema funcione en dev sin credenciales.
+// Cliente SMTP. Usa Gmail (smtp.gmail.com:587 STARTTLS) por defecto.
+// Si faltan credenciales SMTP, los emails se loguean en consola y se reportan
+// como "queued" — útil en dev sin credenciales reales.
 
 export type EmailPayload = {
   to: string;
@@ -18,46 +20,42 @@ export type EmailResult = {
   error?: string;
 };
 
-const RESEND_URL = "https://api.resend.com/emails";
+let cachedTransporter: nodemailer.Transporter | null = null;
+
+function getTransporter(): nodemailer.Transporter | null {
+  if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS) return null;
+  if (cachedTransporter) return cachedTransporter;
+  cachedTransporter = nodemailer.createTransport({
+    host: env.SMTP_HOST,
+    port: env.SMTP_PORT,
+    secure: env.SMTP_PORT === 465,
+    auth: {
+      user: env.SMTP_USER,
+      pass: env.SMTP_PASS,
+    },
+  });
+  return cachedTransporter;
+}
 
 export async function sendEmail(payload: EmailPayload): Promise<EmailResult> {
-  if (!env.RESEND_API_KEY) {
-    console.warn("[email/resend] RESEND_API_KEY no configurado. Email logueado:");
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn("[email/mailer] SMTP no configurado. Email logueado:");
     console.warn(`  to: ${payload.to}`);
     console.warn(`  subject: ${payload.subject}`);
-    if (payload.text) {
-      console.warn(`  text: ${payload.text}`);
-    }
+    if (payload.text) console.warn(`  text: ${payload.text}`);
     return { ok: true, delivery: "logged" };
   }
 
   try {
-    const response = await fetch(RESEND_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${env.RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: env.RESEND_FROM,
-        to: [payload.to],
-        subject: payload.subject,
-        html: payload.html,
-        text: payload.text,
-      }),
+    const info = await transporter.sendMail({
+      from: env.SMTP_FROM,
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
     });
-    const data = (await response.json().catch(() => ({}))) as {
-      id?: string;
-      message?: string;
-    };
-    if (!response.ok) {
-      return {
-        ok: false,
-        delivery: "failed",
-        error: data.message ?? `HTTP ${response.status}`,
-      };
-    }
-    return { ok: true, id: data.id, delivery: "sent" };
+    return { ok: true, id: info.messageId, delivery: "sent" };
   } catch (err) {
     return {
       ok: false,

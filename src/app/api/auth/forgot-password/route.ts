@@ -11,7 +11,7 @@ import { env } from "@/lib/env";
 import {
   renderPasswordResetEmail,
   sendEmail,
-} from "@/lib/email/resend";
+} from "@/lib/email/mailer";
 
 const ForgotRequest = z.object({
   email: z.string().email(),

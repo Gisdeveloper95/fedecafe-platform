@@ -13,10 +13,13 @@ const EnvSchema = z.object({
     .int()
     .positive()
     .default(7),
-  RESEND_API_KEY: z.string().optional(),
-  RESEND_FROM: z
+  SMTP_HOST: z.string().default("smtp.gmail.com"),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z
     .string()
-    .default("Fedecafe Plataforma <onboarding@resend.dev>"),
+    .default("Fedecafe Plataforma <geocode.apps@gmail.com>"),
   PASSWORD_RESET_TTL_MIN: z.coerce.number().int().positive().default(60),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
