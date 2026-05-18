@@ -21,6 +21,12 @@ const EnvSchema = z.object({
     .string()
     .default("Fedecafe Plataforma <geocode.apps@gmail.com>"),
   PASSWORD_RESET_TTL_MIN: z.coerce.number().int().positive().default(60),
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_BUCKET: z.string().optional(),
+  R2_PUBLIC_BASE_URL: z.string().url().optional(),
+  CAPTURES_PRESIGN_TTL_SEC: z.coerce.number().int().positive().default(3600),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
 

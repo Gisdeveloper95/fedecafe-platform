@@ -15,6 +15,13 @@
       "when": 1779135741869,
       "tag": "0001_clean_doctor_spectrum",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1779147254188,
+      "tag": "0002_worried_ser_duncan",
+      "breakpoints": true
     }
   ]
 }

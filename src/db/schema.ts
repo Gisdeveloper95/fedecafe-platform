@@ -290,6 +290,121 @@ export const recorridoPuntos = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Capturas del operario en staging (Capture → Review → Production)
+// ---------------------------------------------------------------------------
+//
+// Toda operación que mande el operario desde campo entra acá primero. Nada
+// toca tablas productivas hasta que un admin la apruebe.
+
+export const pendingCaptures = sqliteTable(
+  "pending_captures",
+  {
+    id: text("id").primaryKey(), // UUID generado en el dispositivo (idempotency key)
+    opType: text("op_type", {
+      enum: [
+        "capture_visit",
+        "create_medidor",
+        "update_medidor",
+        "mark_removed",
+        "create_estructura",
+        "update_estructura",
+        "report_anomaly",
+      ],
+    }).notNull(),
+    targetType: text("target_type", {
+      enum: ["medidor", "estructura"],
+    }).notNull(),
+    targetId: text("target_id"), // contrato/codigo de la entidad afectada (null si es create)
+    payloadJson: text("payload_json").notNull(),
+    attachmentsJson: text("attachments_json"), // ["photos/.../1.jpg", "photos/.../2.jpg"]
+
+    operarioId: text("operario_id")
+      .notNull()
+      .references(() => users.id),
+    rutaId: text("ruta_id").references(() => rutas.id),
+    deviceFingerprint: text("device_fingerprint"),
+    capturedAt: text("captured_at").notNull(),
+    uploadedAt: text("uploaded_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+    gpsLat: real("gps_lat"),
+    gpsLon: real("gps_lon"),
+    gpsAccuracy: real("gps_accuracy"),
+
+    state: text("state", {
+      enum: ["pending", "approved", "rejected", "needs_info", "apply_failed"],
+    })
+      .notNull()
+      .default("pending"),
+    reviewedBy: text("reviewed_by").references(() => users.id),
+    reviewedAt: text("reviewed_at"),
+    reviewNotes: text("review_notes"),
+
+    appliedToTable: text("applied_to_table"),
+    appliedToId: text("applied_to_id"),
+    appliedAt: text("applied_at"),
+    applyError: text("apply_error"),
+  },
+  (t) => [
+    index("idx_pending_state").on(t.state, t.uploadedAt),
+    index("idx_pending_operario").on(t.operarioId, t.uploadedAt),
+    index("idx_pending_target").on(t.targetType, t.targetId),
+  ],
+);
+
+// Llaves de idempotencia para que reintentos del cliente no dupliquen.
+// El cliente genera un UUID por operación; si llega 2 veces, devolvemos el mismo resultado.
+export const idempotencyKeys = sqliteTable(
+  "idempotency_keys",
+  {
+    key: text("key").primaryKey(),
+    scope: text("scope").notNull(), // ej: "captures"
+    responseJson: text("response_json").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (t) => [index("idx_idempotency_expires").on(t.expiresAt)],
+);
+
+// ---------------------------------------------------------------------------
+// Catálogo de assets versionados en R2 (MBTiles, ortofotos, routing dbs)
+// ---------------------------------------------------------------------------
+
+export const dataAssets = sqliteTable(
+  "data_assets",
+  {
+    key: text("key").primaryKey(), // ej: "basemap-osm-eje-cafetero"
+    layerType: text("layer_type", {
+      enum: [
+        "basemap",
+        "ortofoto",
+        "routing_db",
+        "vias",
+        "tuberias",
+        "fotos_historicas",
+      ],
+    }).notNull(),
+    scope: text("scope"), // ej: "quindio" | "eje-cafetero" | "global"
+    version: integer("version").notNull(),
+    storageKey: text("storage_key").notNull(), // path dentro del bucket R2
+    sizeBytes: integer("size_bytes"),
+    sha256: text("sha256"),
+    contentType: text("content_type"),
+    publishedAt: text("published_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+    publishedBy: text("published_by"),
+    notes: text("notes"),
+  },
+  (t) => [
+    index("idx_assets_layer").on(t.layerType, t.scope),
+    index("idx_assets_published").on(t.publishedAt),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Log de auditoria
 // ---------------------------------------------------------------------------
 
@@ -316,6 +431,10 @@ export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
 export type DemoToken = typeof demoTokens.$inferSelect;
+export type PendingCapture = typeof pendingCaptures.$inferSelect;
+export type NewPendingCapture = typeof pendingCaptures.$inferInsert;
+export type DataAsset = typeof dataAssets.$inferSelect;
+export type NewDataAsset = typeof dataAssets.$inferInsert;
 export type Medidor = typeof medidores.$inferSelect;
 export type Estructura = typeof estructuras.$inferSelect;
 export type Ruta = typeof rutas.$inferSelect;
