@@ -7,7 +7,17 @@ const EnvSchema = z.object({
   BETTER_AUTH_URL: z.string().url(),
   MOBILE_JWT_SECRET: z.string().min(32),
   MOBILE_ACCESS_TOKEN_TTL_MIN: z.coerce.number().int().positive().default(60),
-  MOBILE_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(180),
+  MOBILE_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(15),
+  MOBILE_REFRESH_TOKEN_TTL_DAYS_DEMO: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(7),
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM: z
+    .string()
+    .default("Fedecafe Plataforma <onboarding@resend.dev>"),
+  PASSWORD_RESET_TTL_MIN: z.coerce.number().int().positive().default(60),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
 

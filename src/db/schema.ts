@@ -11,6 +11,15 @@ import {
 // ---------------------------------------------------------------------------
 // Usuarios y sesiones
 // ---------------------------------------------------------------------------
+//
+// status: estado del acceso del usuario.
+//   - active: puede operar normalmente
+//   - suspended: queda bloqueado al próximo refresh (offline grace period vence con el JWT actual)
+//   - deleted: equivalente a borrado lógico
+//
+// accountType:
+//   - regular: usuario permanente, login con username + password
+//   - demo: activado con token de 6 dígitos, TTL controlado por demoTokensTable.expiresAt
 
 export const users = sqliteTable(
   "users",
@@ -19,7 +28,21 @@ export const users = sqliteTable(
     username: text("username").notNull().unique(),
     passwordHash: text("password_hash").notNull(),
     fullName: text("full_name").notNull(),
+    email: text("email"),
     role: text("role", { enum: ["admin", "operario"] }).notNull(),
+    status: text("status", {
+      enum: ["active", "suspended", "deleted"],
+    })
+      .notNull()
+      .default("active"),
+    accountType: text("account_type", { enum: ["regular", "demo"] })
+      .notNull()
+      .default("regular"),
+    mustChangePassword: integer("must_change_password", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    accessExpiresAt: text("access_expires_at"),
+    demoTokenCode: text("demo_token_code"),
     active: integer("active", { mode: "boolean" }).notNull().default(true),
     createdAt: text("created_at")
       .notNull()
@@ -27,7 +50,10 @@ export const users = sqliteTable(
     createdBy: text("created_by"),
     lastLoginAt: text("last_login_at"),
   },
-  (t) => [index("idx_users_username").on(t.username)],
+  (t) => [
+    index("idx_users_username").on(t.username),
+    index("idx_users_status").on(t.status),
+  ],
 );
 
 export const sessions = sqliteTable(
@@ -69,6 +95,67 @@ export const webSessions = sqliteTable(
       .notNull()
       .default(sql`(CURRENT_TIMESTAMP)`),
   },
+);
+
+// ---------------------------------------------------------------------------
+// Demo tokens (códigos de 6 dígitos generados por admin)
+// ---------------------------------------------------------------------------
+
+export const demoTokens = sqliteTable(
+  "demo_tokens",
+  {
+    code: text("code").primaryKey(),
+    label: text("label"),
+    expiresAt: text("expires_at").notNull(),
+    maxActivations: integer("max_activations").notNull().default(1),
+    activationsUsed: integer("activations_used").notNull().default(0),
+    isRevoked: integer("is_revoked", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+    createdBy: text("created_by"),
+    notes: text("notes"),
+  },
+  (t) => [index("idx_demo_tokens_expires").on(t.expiresAt)],
+);
+
+// ---------------------------------------------------------------------------
+// Configuración global (kill switch y otros)
+// ---------------------------------------------------------------------------
+
+export const globalSettings = sqliteTable("global_settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`(CURRENT_TIMESTAMP)`),
+  updatedBy: text("updated_by"),
+});
+
+// ---------------------------------------------------------------------------
+// Reset de contraseña (links enviados por correo)
+// ---------------------------------------------------------------------------
+
+export const passwordResets = sqliteTable(
+  "password_resets",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    usedAt: text("used_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+  },
+  (t) => [
+    index("idx_password_resets_user").on(t.userId),
+    index("idx_password_resets_token").on(t.tokenHash),
+  ],
 );
 
 // ---------------------------------------------------------------------------
@@ -228,6 +315,7 @@ export const auditLog = sqliteTable(
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
 export type Session = typeof sessions.$inferSelect;
+export type DemoToken = typeof demoTokens.$inferSelect;
 export type Medidor = typeof medidores.$inferSelect;
 export type Estructura = typeof estructuras.$inferSelect;
 export type Ruta = typeof rutas.$inferSelect;

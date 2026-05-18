@@ -1,19 +1,41 @@
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 
 import { db, schema } from "@/db/client";
+import { logAudit } from "@/lib/audit";
 import { json, jsonError, parseJson } from "@/lib/api/json";
 import { hashPassword } from "@/lib/auth/passwords";
 import { requireAdmin } from "@/lib/auth/principal";
+import { env } from "@/lib/env";
+import {
+  renderCredentialsEmail,
+  sendEmail,
+} from "@/lib/email/resend";
 
 const CreateUserRequest = z.object({
   username: z.string().min(3).max(50).regex(/^[a-z0-9._-]+$/i),
-  password: z.string().min(6).max(100),
+  password: z.string().min(6).max(100).optional(),
   fullName: z.string().min(2).max(120),
   role: z.enum(["admin", "operario"]),
+  email: z
+    .string()
+    .email()
+    .optional()
+    .or(z.literal("").transform(() => undefined)),
+  sendCredentials: z.boolean().optional().default(false),
+  mustChangePassword: z.boolean().optional().default(true),
 });
+
+function generateTempPassword(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const chars = new Array(10);
+  for (let i = 0; i < chars.length; i++) {
+    chars[i] = alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return chars.join("");
+}
 
 export async function GET(request: Request) {
   try {
@@ -25,14 +47,17 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const role = url.searchParams.get("role");
-  const includeInactive = url.searchParams.get("includeInactive") === "true";
+  const status = url.searchParams.get("status");
+  const includeDeleted = url.searchParams.get("includeDeleted") === "true";
 
   const where = [];
   if (role === "admin" || role === "operario") {
     where.push(eq(schema.users.role, role));
   }
-  if (!includeInactive) {
-    where.push(eq(schema.users.active, true));
+  if (status === "active" || status === "suspended" || status === "deleted") {
+    where.push(eq(schema.users.status, status));
+  } else if (!includeDeleted) {
+    where.push(ne(schema.users.status, "deleted"));
   }
 
   const rows = await db
@@ -40,8 +65,13 @@ export async function GET(request: Request) {
       id: schema.users.id,
       username: schema.users.username,
       fullName: schema.users.fullName,
+      email: schema.users.email,
       role: schema.users.role,
-      active: schema.users.active,
+      status: schema.users.status,
+      accountType: schema.users.accountType,
+      mustChangePassword: schema.users.mustChangePassword,
+      accessExpiresAt: schema.users.accessExpiresAt,
+      demoTokenCode: schema.users.demoTokenCode,
       createdAt: schema.users.createdAt,
       createdBy: schema.users.createdBy,
       lastLoginAt: schema.users.lastLoginAt,
@@ -81,26 +111,51 @@ export async function POST(request: Request) {
     return jsonError("username_taken", 409);
   }
 
+  if (body.sendCredentials && !body.email) {
+    return jsonError("email_required_when_sendCredentials", 400);
+  }
+
   const id = randomUUID();
-  const passwordHash = await hashPassword(body.password);
+  const tempPassword = body.password ?? generateTempPassword();
+  const passwordHash = await hashPassword(tempPassword);
 
   await db.insert(schema.users).values({
     id,
     username,
     passwordHash,
     fullName: body.fullName,
+    email: body.email ?? null,
     role: body.role,
+    status: "active",
+    accountType: "regular",
+    mustChangePassword: body.mustChangePassword,
     active: true,
     createdBy: admin.userId,
   });
 
-  await db.insert(schema.auditLog).values({
-    id: randomUUID(),
+  await logAudit({
     userId: admin.userId,
-    action: "USER_CREATED",
+    action: "user.created",
     targetId: id,
-    details: JSON.stringify({ username, role: body.role }),
+    details: { username, role: body.role, email: body.email ?? null },
   });
+
+  let emailResult: { delivery: string; error?: string } | null = null;
+  if (body.sendCredentials && body.email) {
+    const tpl = renderCredentialsEmail({
+      fullName: body.fullName,
+      username,
+      tempPassword,
+      loginUrl: env.BETTER_AUTH_URL + "/login",
+    });
+    const r = await sendEmail({
+      to: body.email,
+      subject: tpl.subject,
+      html: tpl.html,
+      text: tpl.text,
+    });
+    emailResult = { delivery: r.delivery, error: r.error };
+  }
 
   return json(
     {
@@ -108,9 +163,14 @@ export async function POST(request: Request) {
         id,
         username,
         fullName: body.fullName,
+        email: body.email ?? null,
         role: body.role,
-        active: true,
+        status: "active",
+        accountType: "regular",
+        mustChangePassword: body.mustChangePassword,
       },
+      tempPassword: body.password ? undefined : tempPassword,
+      email: emailResult,
     },
     { status: 201 },
   );

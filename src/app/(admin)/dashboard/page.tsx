@@ -16,11 +16,19 @@ export default async function DashboardPage() {
   if (user.role === "admin") {
     const [users, operarios, medidores, estructuras, rutasPendientes, recorridos] =
       await Promise.all([
-        db.select({ c: count() }).from(schema.users).where(eq(schema.users.active, true)),
         db
           .select({ c: count() })
           .from(schema.users)
-          .where(and(eq(schema.users.active, true), eq(schema.users.role, "operario"))),
+          .where(eq(schema.users.status, "active")),
+        db
+          .select({ c: count() })
+          .from(schema.users)
+          .where(
+            and(
+              eq(schema.users.status, "active"),
+              eq(schema.users.role, "operario"),
+            ),
+          ),
         db.select({ c: count() }).from(schema.medidores),
         db.select({ c: count() }).from(schema.estructuras),
         db

@@ -3,25 +3,27 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+type Status = "active" | "suspended" | "deleted";
+
 export function UserActions({
   userId,
-  active,
+  status,
   isSelf,
 }: {
   userId: string;
-  active: boolean;
+  status: Status;
   isSelf: boolean;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
-  async function toggleActive() {
-    if (!confirm(active ? "Desactivar este usuario?" : "Reactivar?")) return;
+  async function setStatus(next: Status, msg: string) {
+    if (!confirm(msg)) return;
     setLoading(true);
     const res = await fetch(`/api/users/${userId}`, {
-      method: active ? "DELETE" : "PATCH",
+      method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: active ? undefined : JSON.stringify({ active: true }),
+      body: JSON.stringify({ status: next }),
     });
     setLoading(false);
     if (!res.ok) {
@@ -32,8 +34,23 @@ export function UserActions({
     router.refresh();
   }
 
+  async function softDelete() {
+    if (!confirm("Eliminar este usuario? Se podrá restaurar luego.")) return;
+    setLoading(true);
+    const res = await fetch(`/api/users/${userId}`, { method: "DELETE" });
+    setLoading(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data?.error ?? "Error");
+      return;
+    }
+    router.refresh();
+  }
+
   async function resetPassword() {
-    const newPassword = prompt("Nueva contrasena (min 6 caracteres)");
+    const newPassword = prompt(
+      "Nueva contraseña (mínimo 6 caracteres). El usuario deberá cambiarla en su próximo login.",
+    );
     if (!newPassword || newPassword.length < 6) return;
     setLoading(true);
     const res = await fetch(`/api/users/${userId}/password`, {
@@ -43,14 +60,14 @@ export function UserActions({
     });
     setLoading(false);
     if (!res.ok) {
-      alert("Error al cambiar contrasena");
+      alert("Error al cambiar contraseña");
       return;
     }
-    alert("Contrasena actualizada.");
+    alert("Contraseña actualizada. Las sesiones móviles fueron revocadas.");
   }
 
   return (
-    <div className="flex gap-2 justify-end">
+    <div className="flex gap-2 justify-end flex-wrap">
       <button
         onClick={resetPassword}
         disabled={loading}
@@ -58,17 +75,47 @@ export function UserActions({
       >
         Reset password
       </button>
-      {!isSelf && (
+      {!isSelf && status === "active" && (
         <button
-          onClick={toggleActive}
+          onClick={() =>
+            setStatus(
+              "suspended",
+              "Suspender este usuario? Se revocan sus sesiones y no podrá hacer login.",
+            )
+          }
           disabled={loading}
-          className={`text-xs border rounded px-2 py-1 disabled:opacity-50 ${
-            active
-              ? "border-destructive text-destructive hover:bg-red-50"
-              : "border-success text-success hover:bg-green-50"
-          }`}
+          className="text-xs border border-amber-500 text-amber-700 rounded px-2 py-1 hover:bg-amber-50 disabled:opacity-50"
         >
-          {active ? "Desactivar" : "Reactivar"}
+          Suspender
+        </button>
+      )}
+      {!isSelf && status === "suspended" && (
+        <button
+          onClick={() => setStatus("active", "Reactivar este usuario?")}
+          disabled={loading}
+          className="text-xs border border-success text-success rounded px-2 py-1 hover:bg-green-50 disabled:opacity-50"
+        >
+          Reactivar
+        </button>
+      )}
+      {!isSelf && status === "deleted" && (
+        <button
+          onClick={() =>
+            setStatus("active", "Restaurar este usuario como activo?")
+          }
+          disabled={loading}
+          className="text-xs border border-success text-success rounded px-2 py-1 hover:bg-green-50 disabled:opacity-50"
+        >
+          Restaurar
+        </button>
+      )}
+      {!isSelf && status !== "deleted" && (
+        <button
+          onClick={softDelete}
+          disabled={loading}
+          className="text-xs border border-destructive text-destructive rounded px-2 py-1 hover:bg-red-50 disabled:opacity-50"
+        >
+          Eliminar
         </button>
       )}
     </div>

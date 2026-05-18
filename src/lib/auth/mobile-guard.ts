@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 
 import { db, schema } from "@/db/client";
 
+import { describeAccountBlock, getGlobalLockdown } from "./lockdown";
 import { type MobileTokenPayload, verifyMobileToken } from "./mobile-jwt";
 
 export type MobilePrincipal = {
@@ -9,6 +10,7 @@ export type MobilePrincipal = {
   username: string;
   role: "admin" | "operario";
   device: string;
+  accountType: "regular" | "demo";
 };
 
 export async function requireMobileAccess(
@@ -39,17 +41,37 @@ export async function requireMobileAccess(
     );
   }
 
-  // Opcional: verificar que el user siga activo en la DB
   const userRows = await db
-    .select({ active: schema.users.active })
+    .select({
+      status: schema.users.status,
+      accountType: schema.users.accountType,
+      accessExpiresAt: schema.users.accessExpiresAt,
+      role: schema.users.role,
+    })
     .from(schema.users)
     .where(eq(schema.users.id, payload.sub))
     .limit(1);
 
   const user = userRows[0];
-  if (!user || !user.active) {
+  if (!user) {
     throw new Response(
-      JSON.stringify({ error: "user_inactive" }),
+      JSON.stringify({ error: "user_not_found" }),
+      { status: 401, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  const lockdown = await getGlobalLockdown();
+  const block = describeAccountBlock({
+    status: user.status,
+    accountType: user.accountType,
+    accessExpiresAt: user.accessExpiresAt,
+    globalLockdown: lockdown.enabled,
+    role: user.role,
+    bypassLockdownForAdmin: true,
+  });
+  if (!block.allowed) {
+    throw new Response(
+      JSON.stringify({ error: block.reason }),
       { status: 401, headers: { "content-type": "application/json" } },
     );
   }
@@ -59,6 +81,7 @@ export async function requireMobileAccess(
     username: payload.username,
     role: payload.role,
     device: payload.device,
+    accountType: (user.accountType as "regular" | "demo") ?? "regular",
   };
 }
 

@@ -8,10 +8,12 @@ import { LogoutButton } from "./_components/logout-button";
 const adminNav = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/usuarios", label: "Usuarios" },
+  { href: "/demo-tokens", label: "Demos" },
   { href: "/medidores", label: "Medidores" },
   { href: "/estructuras", label: "Estructuras" },
   { href: "/rutas", label: "Rutas" },
   { href: "/recorridos", label: "Recorridos" },
+  { href: "/configuracion", label: "Configuración" },
 ];
 
 const operarioNav = [
@@ -27,6 +29,8 @@ export default async function AdminLayout({
 }) {
   const user = await getWebSessionUser();
   if (!user) redirect("/login");
+  if (user.status !== "active") redirect("/login?suspended=1");
+  if (user.mustChangePassword) redirect("/change-password");
 
   const nav = user.role === "admin" ? adminNav : operarioNav;
 

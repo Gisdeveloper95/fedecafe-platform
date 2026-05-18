@@ -3,7 +3,9 @@ import { z } from "zod";
 
 import { db, schema } from "@/db/client";
 import { json, jsonError, parseJson } from "@/lib/api/json";
+import { describeAccountBlock, getGlobalLockdown } from "@/lib/auth/lockdown";
 import {
+  effectiveRefreshTtlSec,
   hashToken,
   signAccessToken,
   signRefreshToken,
@@ -54,37 +56,71 @@ export async function POST(request: Request) {
     return jsonError("session_expired", 401);
   }
 
-  // Verificar que el usuario sigue activo
+  // Verificar estado actual del usuario y lockdown global
   const userRows = await db
     .select()
     .from(schema.users)
     .where(eq(schema.users.id, payload.sub))
     .limit(1);
   const user = userRows[0];
-  if (!user || !user.active) return jsonError("user_inactive", 401);
+  if (!user) return jsonError("user_not_found", 401);
 
-  // Rotar tokens: emitir uno nuevo y guardar el hash
+  const lockdown = await getGlobalLockdown();
+  const block = describeAccountBlock({
+    status: user.status,
+    accountType: user.accountType,
+    accessExpiresAt: user.accessExpiresAt,
+    globalLockdown: lockdown.enabled,
+    role: user.role,
+    bypassLockdownForAdmin: true,
+  });
+  if (!block.allowed) {
+    // Revocar sesión para evitar reintentos infinitos
+    await db
+      .update(schema.sessions)
+      .set({ revoked: true })
+      .where(eq(schema.sessions.id, session.id));
+    return jsonError(block.reason, 401);
+  }
+
+  const accountType = (user.accountType as "regular" | "demo") ?? "regular";
+  const refreshTtlSec = effectiveRefreshTtlSec({
+    accountType,
+    accessExpiresAt: user.accessExpiresAt,
+  });
+  if (refreshTtlSec <= 0) {
+    await db
+      .update(schema.sessions)
+      .set({ revoked: true })
+      .where(eq(schema.sessions.id, session.id));
+    return jsonError("access_expired", 401);
+  }
+
+  // Rotar tokens
   const newAccess = await signAccessToken({
     sub: user.id,
     role: user.role as "admin" | "operario",
     username: user.username,
     device: payload.device,
+    accountType,
   });
-  const newRefresh = await signRefreshToken({
-    sub: user.id,
-    role: user.role as "admin" | "operario",
-    username: user.username,
-    device: payload.device,
-  });
-
-  const refreshTtlMs = env.MOBILE_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000;
+  const newRefresh = await signRefreshToken(
+    {
+      sub: user.id,
+      role: user.role as "admin" | "operario",
+      username: user.username,
+      device: payload.device,
+      accountType,
+    },
+    refreshTtlSec,
+  );
 
   await db
     .update(schema.sessions)
     .set({
       refreshTokenHash: hashToken(newRefresh),
       lastUsedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + refreshTtlMs).toISOString(),
+      expiresAt: new Date(Date.now() + refreshTtlSec * 1000).toISOString(),
     })
     .where(eq(schema.sessions.id, session.id));
 
@@ -92,6 +128,15 @@ export async function POST(request: Request) {
     accessToken: newAccess,
     refreshToken: newRefresh,
     accessTokenTtlSec: env.MOBILE_ACCESS_TOKEN_TTL_MIN * 60,
-    refreshTokenTtlSec: env.MOBILE_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60,
+    refreshTokenTtlSec: refreshTtlSec,
+    user: {
+      id: user.id,
+      username: user.username,
+      fullName: user.fullName,
+      role: user.role,
+      accountType,
+      mustChangePassword: Boolean(user.mustChangePassword),
+      accessExpiresAt: user.accessExpiresAt,
+    },
   });
 }

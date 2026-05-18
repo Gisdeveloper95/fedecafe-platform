@@ -18,7 +18,12 @@ export default async function NuevaRutaPage() {
       fullName: schema.users.fullName,
     })
     .from(schema.users)
-    .where(and(eq(schema.users.role, "operario"), eq(schema.users.active, true)))
+    .where(
+      and(
+        eq(schema.users.role, "operario"),
+        eq(schema.users.status, "active"),
+      ),
+    )
     .orderBy(asc(schema.users.fullName));
 
   return (

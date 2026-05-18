@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
-
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db, schema } from "@/db/client";
+import { logAudit } from "@/lib/audit";
 import { json, jsonError, parseJson } from "@/lib/api/json";
 import { hashPassword, verifyPassword } from "@/lib/auth/passwords";
 import { requirePrincipal } from "@/lib/auth/principal";
@@ -48,6 +47,7 @@ export async function POST(
     .limit(1);
   const user = rows[0];
   if (!user) return jsonError("not_found", 404);
+  if (user.status === "deleted") return jsonError("not_found", 404);
 
   // Si es self change, debe proveer currentPassword y debe coincidir
   if (isSelf) {
@@ -61,19 +61,18 @@ export async function POST(
   const newHash = await hashPassword(body.newPassword);
   await db
     .update(schema.users)
-    .set({ passwordHash: newHash })
+    .set({ passwordHash: newHash, mustChangePassword: false })
     .where(eq(schema.users.id, id));
 
-  // Revocar todas las sesiones moviles al cambiar password
+  // Revocar todas las sesiones móviles al cambiar password
   await db
     .update(schema.sessions)
     .set({ revoked: true })
     .where(eq(schema.sessions.userId, id));
 
-  await db.insert(schema.auditLog).values({
-    id: randomUUID(),
+  await logAudit({
     userId: principal.userId,
-    action: isSelf ? "PASSWORD_CHANGED_SELF" : "PASSWORD_CHANGED_BY_ADMIN",
+    action: isSelf ? "password.self_changed" : "password.admin_changed",
     targetId: id,
   });
 

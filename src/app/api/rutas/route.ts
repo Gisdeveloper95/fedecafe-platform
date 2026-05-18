@@ -90,7 +90,7 @@ export async function POST(request: Request) {
     .where(eq(schema.users.id, body.operarioId))
     .limit(1);
   const operario = operarioRows[0];
-  if (!operario || !operario.active) {
+  if (!operario || operario.status !== "active") {
     return jsonError("operario_not_found_or_inactive", 400);
   }
 

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 
 import { db, schema } from "@/db/client";
 
+import { describeAccountBlock, getGlobalLockdown } from "./lockdown";
 import { verifyMobileToken } from "./mobile-jwt";
 import { getWebSessionUser } from "./web-session";
 
@@ -10,6 +11,7 @@ export type Principal = {
   username: string;
   fullName: string;
   role: "admin" | "operario";
+  accountType: "regular" | "demo";
   source: "web" | "mobile";
 };
 
@@ -29,12 +31,25 @@ export async function getPrincipal(
         .where(eq(schema.users.id, payload.sub))
         .limit(1);
       const user = rows[0];
-      if (!user || !user.active) return null;
+      if (!user) return null;
+
+      const lockdown = await getGlobalLockdown();
+      const block = describeAccountBlock({
+        status: user.status,
+        accountType: user.accountType,
+        accessExpiresAt: user.accessExpiresAt,
+        globalLockdown: lockdown.enabled,
+        role: user.role,
+        bypassLockdownForAdmin: true,
+      });
+      if (!block.allowed) return null;
+
       return {
         userId: user.id,
         username: user.username,
         fullName: user.fullName,
         role: user.role as "admin" | "operario",
+        accountType: (user.accountType as "regular" | "demo") ?? "regular",
         source: "mobile",
       };
     } catch {
@@ -44,11 +59,24 @@ export async function getPrincipal(
 
   const web = await getWebSessionUser();
   if (!web) return null;
+
+  const lockdown = await getGlobalLockdown();
+  const block = describeAccountBlock({
+    status: web.status,
+    accountType: web.accountType,
+    accessExpiresAt: web.accessExpiresAt,
+    globalLockdown: lockdown.enabled,
+    role: web.role,
+    bypassLockdownForAdmin: true,
+  });
+  if (!block.allowed) return null;
+
   return {
     userId: web.id,
     username: web.username,
     fullName: web.fullName,
     role: web.role,
+    accountType: web.accountType,
     source: "web",
   };
 }

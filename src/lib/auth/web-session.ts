@@ -13,6 +13,10 @@ export type WebSessionUser = {
   username: string;
   fullName: string;
   role: "admin" | "operario";
+  status: "active" | "suspended" | "deleted";
+  accountType: "regular" | "demo";
+  accessExpiresAt: string | null;
+  mustChangePassword: boolean;
 };
 
 export async function createWebSession(userId: string): Promise<string> {
@@ -59,7 +63,10 @@ export async function getWebSessionUser(): Promise<WebSessionUser | null> {
       username: schema.users.username,
       fullName: schema.users.fullName,
       role: schema.users.role,
-      active: schema.users.active,
+      status: schema.users.status,
+      accountType: schema.users.accountType,
+      accessExpiresAt: schema.users.accessExpiresAt,
+      mustChangePassword: schema.users.mustChangePassword,
       expiresAt: schema.webSessions.expiresAt,
     })
     .from(schema.webSessions)
@@ -70,7 +77,7 @@ export async function getWebSessionUser(): Promise<WebSessionUser | null> {
   const row = rows[0];
   if (!row) return null;
 
-  if (!row.active) return null;
+  if (row.status === "deleted") return null;
   if (new Date(row.expiresAt).getTime() < Date.now()) {
     await db.delete(schema.webSessions).where(eq(schema.webSessions.token, token));
     return null;
@@ -81,12 +88,16 @@ export async function getWebSessionUser(): Promise<WebSessionUser | null> {
     username: row.username,
     fullName: row.fullName,
     role: row.role as "admin" | "operario",
+    status: row.status as "active" | "suspended" | "deleted",
+    accountType: (row.accountType as "regular" | "demo") ?? "regular",
+    accessExpiresAt: row.accessExpiresAt ?? null,
+    mustChangePassword: Boolean(row.mustChangePassword),
   };
 }
 
 export async function requireAdmin(): Promise<WebSessionUser> {
   const user = await getWebSessionUser();
-  if (!user || user.role !== "admin") {
+  if (!user || user.role !== "admin" || user.status !== "active") {
     throw new Response("Unauthorized", { status: 401 });
   }
   return user;

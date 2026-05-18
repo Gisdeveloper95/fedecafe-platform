@@ -6,6 +6,8 @@ set -o pipefail
 
 BASE="${BASE:-http://localhost:3000}"
 TMP="$(mktemp -d)"
+# Username unico para no chocar con ejecuciones previas contra la misma DB
+OP_USERNAME="pedro.smoke.$(date +%s)"
 trap "rm -rf $TMP" EXIT
 
 fail() { echo "❌ $1" >&2; exit 1; }
@@ -58,7 +60,7 @@ echo "== 5. Crear operario =="
 CREATE=$(curl -sS -X POST "$BASE/api/users" \
   -H "authorization: Bearer $ACCESS" \
   -H "content-type: application/json" \
-  -d '{"username":"pedro.test","password":"pedro123","fullName":"Pedro Smoke","role":"operario"}')
+  -d "{\"username\":\"$OP_USERNAME\",\"password\":\"pedro123\",\"fullName\":\"Pedro Smoke\",\"role\":\"operario\"}")
 OP_ID=$(echo "$CREATE" | jget "user.id")
 [ -n "$OP_ID" ] || fail "No se creo operario: $CREATE"
 ok "Operario creado id=$OP_ID"
@@ -118,7 +120,7 @@ echo
 echo "== 11. Login operario =="
 OP_LOGIN=$(curl -sS -X POST "$BASE/api/auth/login" \
   -H "content-type: application/json" \
-  -d '{"username":"pedro.test","password":"pedro123","mobile":true,"deviceFingerprint":"pedro-phone"}')
+  -d "{\"username\":\"$OP_USERNAME\",\"password\":\"pedro123\",\"mobile\":true,\"deviceFingerprint\":\"pedro-phone\"}")
 OP_ACCESS=$(echo "$OP_LOGIN" | jget "accessToken")
 [ -n "$OP_ACCESS" ] || fail "Login operario fallo: $OP_LOGIN"
 ok "Login operario ok"

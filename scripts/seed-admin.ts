@@ -50,6 +50,9 @@ async function main() {
     passwordHash: hash,
     fullName,
     role: "admin",
+    status: "active",
+    accountType: "regular",
+    mustChangePassword: false,
     active: true,
   });
 

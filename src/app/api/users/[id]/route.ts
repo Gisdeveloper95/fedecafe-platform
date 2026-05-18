@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
-
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { db, schema } from "@/db/client";
+import { logAudit } from "@/lib/audit";
 import { json, jsonError, parseJson } from "@/lib/api/json";
 import { requireAdmin } from "@/lib/auth/principal";
 
@@ -11,7 +10,9 @@ const UpdateUserRequest = z
   .object({
     fullName: z.string().min(2).max(120).optional(),
     role: z.enum(["admin", "operario"]).optional(),
-    active: z.boolean().optional(),
+    email: z.string().email().nullable().optional(),
+    status: z.enum(["active", "suspended", "deleted"]).optional(),
+    accessExpiresAt: z.string().datetime().nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "empty_payload" });
 
@@ -32,8 +33,13 @@ export async function GET(
       id: schema.users.id,
       username: schema.users.username,
       fullName: schema.users.fullName,
+      email: schema.users.email,
       role: schema.users.role,
-      active: schema.users.active,
+      status: schema.users.status,
+      accountType: schema.users.accountType,
+      mustChangePassword: schema.users.mustChangePassword,
+      accessExpiresAt: schema.users.accessExpiresAt,
+      demoTokenCode: schema.users.demoTokenCode,
       createdAt: schema.users.createdAt,
       createdBy: schema.users.createdBy,
       lastLoginAt: schema.users.lastLoginAt,
@@ -69,8 +75,12 @@ export async function PATCH(
     throw err;
   }
 
-  // Evitar que un admin se desactive/despromueva a si mismo por accidente
-  if (id === admin.userId && (body.active === false || body.role === "operario")) {
+  if (
+    id === admin.userId &&
+    (body.status === "suspended" ||
+      body.status === "deleted" ||
+      body.role === "operario")
+  ) {
     return jsonError("cannot_modify_self_critical_fields", 400);
   }
 
@@ -81,29 +91,36 @@ export async function PATCH(
     .limit(1);
   if (existing.length === 0) return jsonError("not_found", 404);
 
-  await db
-    .update(schema.users)
-    .set({
-      ...(body.fullName !== undefined ? { fullName: body.fullName } : {}),
-      ...(body.role !== undefined ? { role: body.role } : {}),
-      ...(body.active !== undefined ? { active: body.active } : {}),
-    })
-    .where(eq(schema.users.id, id));
+  const update: Record<string, unknown> = {};
+  if (body.fullName !== undefined) update.fullName = body.fullName;
+  if (body.role !== undefined) update.role = body.role;
+  if (body.email !== undefined) update.email = body.email;
+  if (body.status !== undefined) {
+    update.status = body.status;
+    update.active = body.status === "active";
+  }
+  if (body.accessExpiresAt !== undefined) {
+    update.accessExpiresAt = body.accessExpiresAt;
+  }
 
-  // Si se desactiva, revocar todas sus sesiones moviles
-  if (body.active === false) {
+  await db.update(schema.users).set(update).where(eq(schema.users.id, id));
+
+  // Si se suspende/borra, revocar todas sus sesiones móviles
+  if (body.status === "suspended" || body.status === "deleted") {
     await db
       .update(schema.sessions)
       .set({ revoked: true })
       .where(eq(schema.sessions.userId, id));
+    await db
+      .delete(schema.webSessions)
+      .where(eq(schema.webSessions.userId, id));
   }
 
-  await db.insert(schema.auditLog).values({
-    id: randomUUID(),
+  await logAudit({
     userId: admin.userId,
-    action: "USER_UPDATED",
+    action: "user.updated",
     targetId: id,
-    details: JSON.stringify(body),
+    details: body,
   });
 
   return json({ ok: true });
@@ -134,20 +151,21 @@ export async function DELETE(
     .limit(1);
   if (existing.length === 0) return jsonError("not_found", 404);
 
-  // Soft delete: marcar como inactivo + revocar sesiones
   await db
     .update(schema.users)
-    .set({ active: false })
+    .set({ status: "deleted", active: false })
     .where(eq(schema.users.id, id));
   await db
     .update(schema.sessions)
     .set({ revoked: true })
     .where(eq(schema.sessions.userId, id));
+  await db
+    .delete(schema.webSessions)
+    .where(eq(schema.webSessions.userId, id));
 
-  await db.insert(schema.auditLog).values({
-    id: randomUUID(),
+  await logAudit({
     userId: admin.userId,
-    action: "USER_DEACTIVATED",
+    action: "user.deleted",
     targetId: id,
   });
 
