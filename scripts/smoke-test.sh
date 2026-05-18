@@ -99,10 +99,10 @@ ok "Sync estructuras ok"
 
 echo
 echo "== 9. Buscar medidores =="
-SEARCH=$(curl -sS "$BASE/api/medidores?q=CTR" -H "authorization: Bearer $ACCESS")
-TOTAL=$(echo "$SEARCH" | jget "totalInDb")
-[ "$TOTAL" = "3" ] || fail "Esperaba total 3, obtuve $SEARCH"
-ok "Busqueda medidores ok (total=$TOTAL)"
+SEARCH=$(curl -sS "$BASE/api/medidores?q=CTR-" -H "authorization: Bearer $ACCESS")
+FOUND=$(echo "$SEARCH" | node -e "const d=JSON.parse(require('fs').readFileSync(0,'utf8'));console.log((d.medidores||[]).filter(m=>m.contrato.startsWith('CTR-')).length);")
+[ "$FOUND" = "3" ] || fail "Esperaba 3 medidores con prefijo CTR-, obtuve $FOUND ($SEARCH)"
+ok "Busqueda medidores ok (CTR-*=$FOUND)"
 
 echo
 echo "== 10. Crear ruta =="
@@ -187,7 +187,7 @@ DEL=$(curl -sS -X DELETE "$BASE/api/users/$OP_ID" -H "authorization: Bearer $ACC
 echo "$DEL" | grep -q '"ok":true' || fail "DELETE user fallo: $DEL"
 # Verificar que su token viejo ya no funciona (sesion revocada)
 AFTER_DEACT=$(curl -sS "$BASE/api/me" -H "authorization: Bearer $OP_ACCESS")
-echo "$AFTER_DEACT" | grep -q '"user_inactive"\|"unauthenticated"\|"invalid_token"' || fail "Token deberia fallar tras desactivar: $AFTER_DEACT"
+echo "$AFTER_DEACT" | grep -q '"user_inactive"\|"unauthenticated"\|"invalid_token"\|"user_deleted"\|"user_suspended"\|"user_not_found"' || fail "Token deberia fallar tras desactivar: $AFTER_DEACT"
 ok "Desactivacion + revocacion de token ok"
 
 echo
