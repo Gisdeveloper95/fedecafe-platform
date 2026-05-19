@@ -117,6 +117,8 @@ export const rutas = sqliteTable(
       .default("pendiente"),
     fechaObjetivo: text("fecha_objetivo"),
     notas: text("notas"),
+    /// JSON con punto de partida: { lat, lon, label?, favoriteId? }
+    startPointJson: text("start_point_json"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`(CURRENT_TIMESTAMP)`),
@@ -136,10 +138,18 @@ export const rutaItems = sqliteTable(
     rutaId: text("ruta_id")
       .notNull()
       .references(() => rutas.id, { onDelete: "cascade" }),
+    /// Para items kind='entity': es contrato/codigo del medidor o estructura.
+    /// Para items kind='waypoint': UUID generado por el cliente.
     codigo: text("codigo").notNull(),
+    /// 'entity' | 'waypoint'. Si null, asumir 'entity' (compat con datos viejos).
+    kind: text("kind"),
     orden: integer("orden"),
     visitado: integer("visitado", { mode: "boolean" }).notNull().default(false),
     visitadoAt: text("visitado_at"),
+    /// Solo para waypoints: posición geográfica + etiqueta libre.
+    wpLat: real("wp_lat"),
+    wpLon: real("wp_lon"),
+    wpLabel: text("wp_label"),
   },
   (t) => [primaryKey({ columns: [t.rutaId, t.codigo] })],
 );
@@ -186,6 +196,40 @@ export const recorridoPuntos = sqliteTable(
 // ---------------------------------------------------------------------------
 // Tipos inferidos (water)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Fotografías asociadas a entidades GIS (medidor/estructura/tubería)
+// ---------------------------------------------------------------------------
+//
+// El admin sube fotos directamente desde la web a R2 y se asocian aquí.
+// Las fotos capturadas por operarios entran via pending_captures → review.
+// Estas son distintas: van directo a producción porque el admin es la
+// autoridad de validación.
+
+export const entityPhotos = sqliteTable(
+  "entity_photos",
+  {
+    id: text("id").primaryKey(),
+    targetType: text("target_type", {
+      enum: ["medidor", "estructura", "tuberia"],
+    }).notNull(),
+    targetId: text("target_id").notNull(),
+    storageKey: text("storage_key").notNull(),
+    contentType: text("content_type"),
+    sizeBytes: integer("size_bytes"),
+    caption: text("caption"),
+    uploadedBy: text("uploaded_by"),
+    uploadedAt: text("uploaded_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+    /// Si la foto vino de una captura del operario (no del admin web).
+    sourceCaptureId: text("source_capture_id"),
+  },
+  (t) => [
+    index("idx_photos_target").on(t.targetType, t.targetId),
+    index("idx_photos_uploaded").on(t.uploadedAt),
+  ],
+);
 
 // ---------------------------------------------------------------------------
 // Anomalías reportadas en campo (visualmente dañado, sin acceso, etc.)
@@ -238,3 +282,5 @@ export type Recorrido = typeof recorridos.$inferSelect;
 export type RecorridoPunto = typeof recorridoPuntos.$inferSelect;
 export type EstructuraAnomaly = typeof estructuraAnomalies.$inferSelect;
 export type NewEstructuraAnomaly = typeof estructuraAnomalies.$inferInsert;
+export type EntityPhoto = typeof entityPhotos.$inferSelect;
+export type NewEntityPhoto = typeof entityPhotos.$inferInsert;

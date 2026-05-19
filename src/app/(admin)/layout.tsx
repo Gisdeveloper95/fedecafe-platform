@@ -48,8 +48,10 @@ export default async function AdminLayout({
       { href: "/anomalias", label: "Anomalías", badge: anomaliesOpen },
       { href: "/medidores", label: "Medidores" },
       { href: "/estructuras", label: "Estructuras" },
+      { href: "/tuberias", label: "Tuberías" },
       { href: "/rutas", label: "Rutas" },
       { href: "/recorridos", label: "Recorridos" },
+      { href: "/assets", label: "Assets" },
       { href: "/configuracion", label: "Configuración" },
     ];
   } else {
