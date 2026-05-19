@@ -151,6 +151,70 @@ export async function POST(
         .where(eq(schema.estructuras.codigo, codigo));
       appliedTable = "estructuras";
       appliedId = codigo;
+    } else if (capture.opType === "create_tuberia") {
+      const codigo = String(payload.codigo ?? "").trim();
+      if (!codigo) throw new Error("codigo_required");
+      const exists = await db
+        .select({ codigo: schema.tuberias.codigo })
+        .from(schema.tuberias)
+        .where(eq(schema.tuberias.codigo, codigo))
+        .limit(1);
+      if (exists.length > 0) throw new Error("codigo_already_exists");
+      await db.insert(schema.tuberias).values({
+        codigo,
+        layerName: String(payload.layerName ?? payload.layer_name ?? "tuberias"),
+        material: payload.material ? String(payload.material) : null,
+        diametro: payload.diametro ? String(payload.diametro) : null,
+        ramal: payload.ramal ? String(payload.ramal) : null,
+        municipio: payload.municipio ? String(payload.municipio) : null,
+        acueducto: payload.acueducto ? String(payload.acueducto) : null,
+        longitudM: payload.longitud != null ? Number(payload.longitud) : null,
+        centroidLat:
+          payload.centroid_lat != null
+            ? Number(payload.centroid_lat)
+            : capture.gpsLat ?? null,
+        centroidLon:
+          payload.centroid_lon != null
+            ? Number(payload.centroid_lon)
+            : capture.gpsLon ?? null,
+        geometryJson: payload.geometry_json
+          ? String(payload.geometry_json)
+          : null,
+      });
+      appliedTable = "tuberias";
+      appliedId = codigo;
+    } else if (capture.opType === "update_tuberia") {
+      const codigo = capture.targetId;
+      if (!codigo) throw new Error("target_id_required");
+      const update: Record<string, unknown> = { updatedAt: now };
+      if (payload.material !== undefined) update.material = payload.material;
+      if (payload.diametro !== undefined) update.diametro = payload.diametro;
+      if (payload.ramal !== undefined) update.ramal = payload.ramal;
+      if (payload.municipio !== undefined) update.municipio = payload.municipio;
+      if (payload.acueducto !== undefined) update.acueducto = payload.acueducto;
+      if (payload.longitud !== undefined) update.longitudM = Number(payload.longitud);
+      if (payload.centroid_lat !== undefined)
+        update.centroidLat = Number(payload.centroid_lat);
+      if (payload.centroid_lon !== undefined)
+        update.centroidLon = Number(payload.centroid_lon);
+      if (payload.geometry_json !== undefined)
+        update.geometryJson = payload.geometry_json;
+      await db
+        .update(schema.tuberias)
+        .set(update)
+        .where(eq(schema.tuberias.codigo, codigo));
+      appliedTable = "tuberias";
+      appliedId = codigo;
+    } else if (
+      capture.opType === "mark_removed" ||
+      capture.opType === "mark_removed_medidor" ||
+      capture.opType === "mark_removed_estructura" ||
+      capture.opType === "mark_removed_tuberia"
+    ) {
+      // Borrado lógico: la entidad va al log de auditoría. No la borramos de la
+      // tabla productiva todavía (mantener el historial; admin puede borrar manual).
+      appliedTable = "audit_log";
+      appliedId = capture.targetId;
     } else if (capture.opType === "report_anomaly") {
       // Reporte de anomalía: por ahora solo queda registrado en audit, sin tabla aparte.
       appliedTable = "audit_log";

@@ -67,6 +67,34 @@ export const estructuras = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Tuberías (geometría LineString como GeoJSON serializado en texto)
+// ---------------------------------------------------------------------------
+
+export const tuberias = sqliteTable(
+  "tuberias",
+  {
+    codigo: text("codigo").primaryKey(),
+    layerName: text("layer_name").notNull(),
+    material: text("material"),
+    diametro: text("diametro"),
+    ramal: text("ramal"),
+    municipio: text("municipio"),
+    acueducto: text("acueducto"),
+    longitudM: real("longitud_m"),
+    centroidLat: real("centroid_lat"),
+    centroidLon: real("centroid_lon"),
+    geometryJson: text("geometry_json"),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+  },
+  (t) => [
+    index("idx_tuberias_layer").on(t.layerName),
+    index("idx_tuberias_municipio").on(t.municipio),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Rutas de trabajo (asignación de puntos a un operario)
 // ---------------------------------------------------------------------------
 
@@ -157,6 +185,7 @@ export const recorridoPuntos = sqliteTable(
 
 export type Medidor = typeof medidores.$inferSelect;
 export type Estructura = typeof estructuras.$inferSelect;
+export type Tuberia = typeof tuberias.$inferSelect;
 export type Ruta = typeof rutas.$inferSelect;
 export type RutaItem = typeof rutaItems.$inferSelect;
 export type Recorrido = typeof recorridos.$inferSelect;

@@ -15,16 +15,21 @@ const OP_TYPES = [
   "capture_visit",
   "create_medidor",
   "update_medidor",
-  "mark_removed",
+  "mark_removed_medidor",
   "create_estructura",
   "update_estructura",
+  "mark_removed_estructura",
+  "create_tuberia",
+  "update_tuberia",
+  "mark_removed_tuberia",
+  "mark_removed", // legacy genérico
   "report_anomaly",
 ] as const;
 
 const CaptureRequest = z.object({
   id: z.string().uuid(),
   opType: z.enum(OP_TYPES),
-  targetType: z.enum(["medidor", "estructura"]),
+  targetType: z.enum(["medidor", "estructura", "tuberia"]),
   targetId: z.string().nullable().optional(),
   payload: z.record(z.string(), z.unknown()),
   attachments: z

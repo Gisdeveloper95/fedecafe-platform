@@ -163,20 +163,14 @@ export const pendingCaptures = sqliteTable(
   "pending_captures",
   {
     id: text("id").primaryKey(),
-    opType: text("op_type", {
-      enum: [
-        "capture_visit",
-        "create_medidor",
-        "update_medidor",
-        "mark_removed",
-        "create_estructura",
-        "update_estructura",
-        "report_anomaly",
-      ],
-    }).notNull(),
-    targetType: text("target_type", {
-      enum: ["medidor", "estructura"],
-    }).notNull(),
+    /// Valores válidos validados en aplicación (zod):
+    /// capture_visit | create_medidor | update_medidor | mark_removed_medidor
+    /// create_estructura | update_estructura | mark_removed_estructura
+    /// create_tuberia | update_tuberia | mark_removed_tuberia
+    /// report_anomaly
+    opType: text("op_type").notNull(),
+    /// medidor | estructura | tuberia
+    targetType: text("target_type").notNull(),
     targetId: text("target_id"),
     payloadJson: text("payload_json").notNull(),
     attachmentsJson: text("attachments_json"),
