@@ -3,22 +3,45 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useDialog } from "@/components/ui/modal";
+import { useToast } from "@/components/ui/toast";
+
 type Status = "active" | "suspended" | "deleted";
 
 export function UserActions({
   userId,
   status,
   isSelf,
+  hasEmail,
 }: {
   userId: string;
   status: Status;
   isSelf: boolean;
+  hasEmail: boolean;
 }) {
   const router = useRouter();
+  const dialog = useDialog();
+  const toast = useToast();
   const [loading, setLoading] = useState(false);
 
   async function setStatus(next: Status, msg: string) {
-    if (!confirm(msg)) return;
+    const ok = await dialog.confirm({
+      title:
+        next === "suspended"
+          ? "Suspender usuario"
+          : next === "active"
+          ? "Reactivar usuario"
+          : "Cambiar estado",
+      message: msg,
+      danger: next === "suspended" || next === "deleted",
+      confirmLabel:
+        next === "suspended"
+          ? "Suspender"
+          : next === "active"
+          ? "Reactivar"
+          : "Continuar",
+    });
+    if (!ok) return;
     setLoading(true);
     const res = await fetch(`/api/users/${userId}`, {
       method: "PATCH",
@@ -28,30 +51,52 @@ export function UserActions({
     setLoading(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert(data?.error ?? "Error");
+      toast.error(data?.error ?? "No se pudo actualizar el estado");
       return;
     }
+    toast.success(
+      next === "suspended"
+        ? "Usuario suspendido. Sus sesiones móviles fueron revocadas."
+        : next === "active"
+        ? "Usuario reactivado."
+        : "Estado actualizado.",
+    );
     router.refresh();
   }
 
   async function softDelete() {
-    if (!confirm("Eliminar este usuario? Se podrá restaurar luego.")) return;
+    const ok = await dialog.confirm({
+      title: "Eliminar usuario",
+      message: "Eliminar este usuario? Se podrá restaurar luego.",
+      danger: true,
+      confirmLabel: "Eliminar",
+    });
+    if (!ok) return;
     setLoading(true);
     const res = await fetch(`/api/users/${userId}`, { method: "DELETE" });
     setLoading(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert(data?.error ?? "Error");
+      toast.error(data?.error ?? "No se pudo eliminar");
       return;
     }
+    toast.success("Usuario eliminado");
     router.refresh();
   }
 
   async function resetPassword() {
-    const newPassword = prompt(
-      "Nueva contraseña (mínimo 6 caracteres). El usuario deberá cambiarla en su próximo login.",
-    );
-    if (!newPassword || newPassword.length < 6) return;
+    const newPassword = await dialog.prompt({
+      title: "Restablecer contraseña",
+      message:
+        "Define una contraseña temporal. El usuario tendrá que cambiarla en su próximo inicio de sesión.",
+      label: "Nueva contraseña",
+      placeholder: "Mínimo 6 caracteres",
+      required: true,
+      validate: (v) =>
+        v.length < 6 ? "Debe tener al menos 6 caracteres" : null,
+      okLabel: "Actualizar",
+    });
+    if (!newPassword) return;
     setLoading(true);
     const res = await fetch(`/api/users/${userId}/password`, {
       method: "POST",
@@ -60,10 +105,42 @@ export function UserActions({
     });
     setLoading(false);
     if (!res.ok) {
-      alert("Error al cambiar contraseña");
+      toast.error("Error al cambiar contraseña");
       return;
     }
-    alert("Contraseña actualizada. Las sesiones móviles fueron revocadas.");
+    toast.success(
+      "Contraseña actualizada. Las sesiones móviles fueron revocadas.",
+    );
+  }
+
+  async function sendResetByEmail() {
+    if (!hasEmail) {
+      await dialog.alert({
+        title: "Sin correo registrado",
+        message:
+          "Este usuario no tiene correo electrónico. Agrégalo en su perfil antes de enviar el enlace de restablecimiento.",
+        tone: "warning",
+      });
+      return;
+    }
+    const ok = await dialog.confirm({
+      title: "Enviar enlace de restablecimiento",
+      message:
+        "Se enviará un correo con un enlace para que el usuario defina una contraseña nueva. El enlace es válido por 1 hora.",
+      confirmLabel: "Enviar correo",
+    });
+    if (!ok) return;
+    setLoading(true);
+    const res = await fetch(`/api/users/${userId}/send-reset`, {
+      method: "POST",
+    });
+    setLoading(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      toast.error(data?.error ?? "No se pudo enviar el correo");
+      return;
+    }
+    toast.success("Correo de restablecimiento enviado.");
   }
 
   return (
@@ -74,6 +151,18 @@ export function UserActions({
         className="text-xs border border-border rounded px-2 py-1 hover:bg-muted disabled:opacity-50"
       >
         Reset password
+      </button>
+      <button
+        onClick={sendResetByEmail}
+        disabled={loading}
+        className="text-xs border border-border rounded px-2 py-1 hover:bg-muted disabled:opacity-50"
+        title={
+          hasEmail
+            ? "Envía enlace de restablecimiento al correo del usuario"
+            : "El usuario no tiene correo registrado"
+        }
+      >
+        Enviar reset por correo
       </button>
       {!isSelf && status === "active" && (
         <button

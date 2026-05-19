@@ -6,6 +6,7 @@ import { db, schema } from "@/db/client";
 import { getWebSessionUser } from "@/lib/auth/web-session";
 
 import { LogoutButton } from "./_components/logout-button";
+import { AdminUIProviders } from "./_providers";
 
 type NavItem = { href: string; label: string; badge?: number };
 
@@ -56,9 +57,10 @@ export default async function AdminLayout({
   }
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="bg-brand text-brand-foreground shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <AdminUIProviders>
+      <div className="min-h-screen flex flex-col">
+        <header className="bg-brand text-brand-foreground shadow-sm">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <Link href="/dashboard" className="font-bold text-lg">
               Fedecafe Platform
@@ -89,9 +91,10 @@ export default async function AdminLayout({
           </div>
         </div>
       </header>
-      <main className="flex-1">
-        <div className="max-w-7xl mx-auto px-4 py-6">{children}</div>
-      </main>
-    </div>
+        <main className="flex-1">
+          <div className="max-w-7xl mx-auto px-4 py-6">{children}</div>
+        </main>
+      </div>
+    </AdminUIProviders>
   );
 }

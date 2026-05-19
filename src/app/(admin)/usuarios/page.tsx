@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { desc, ne } from "drizzle-orm";
+import { and, desc, eq, like, ne, or, sql } from "drizzle-orm";
 import { redirect } from "next/navigation";
 
 import { db, schema } from "@/db/client";
 import { getWebSessionUser } from "@/lib/auth/web-session";
 
 import { UserActions } from "./user-actions";
+import { UsuariosFilters } from "./filters";
 
 function statusLabel(status: string) {
   switch (status) {
@@ -23,14 +24,51 @@ function statusLabel(status: string) {
 export default async function UsuariosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ includeDeleted?: string }>;
+  searchParams: Promise<{
+    q?: string;
+    role?: string;
+    status?: string;
+    accountType?: string;
+    includeDeleted?: string;
+  }>;
 }) {
   const me = await getWebSessionUser();
   if (!me) redirect("/login");
   if (me.role !== "admin") redirect("/dashboard");
 
   const sp = await searchParams;
+  const q = sp.q?.trim() ?? "";
+  const roleFilter = sp.role ?? "";
+  const statusFilter = sp.status ?? "";
+  const accountTypeFilter = sp.accountType ?? "";
   const includeDeleted = sp.includeDeleted === "true";
+
+  const where = [] as ReturnType<typeof eq>[];
+  if (!includeDeleted && !statusFilter) {
+    where.push(ne(schema.users.status, "deleted"));
+  }
+  if (q) {
+    where.push(
+      or(
+        like(sql`LOWER(${schema.users.username})`, `%${q.toLowerCase()}%`),
+        like(sql`LOWER(${schema.users.fullName})`, `%${q.toLowerCase()}%`),
+        like(sql`LOWER(${schema.users.email})`, `%${q.toLowerCase()}%`),
+      )!,
+    );
+  }
+  if (roleFilter === "admin" || roleFilter === "operario") {
+    where.push(eq(schema.users.role, roleFilter));
+  }
+  if (
+    statusFilter === "active" ||
+    statusFilter === "suspended" ||
+    statusFilter === "deleted"
+  ) {
+    where.push(eq(schema.users.status, statusFilter));
+  }
+  if (accountTypeFilter === "regular" || accountTypeFilter === "demo") {
+    where.push(eq(schema.users.accountType, accountTypeFilter));
+  }
 
   const users = await db
     .select({
@@ -46,8 +84,15 @@ export default async function UsuariosPage({
       createdAt: schema.users.createdAt,
     })
     .from(schema.users)
-    .where(includeDeleted ? undefined : ne(schema.users.status, "deleted"))
+    .where(where.length > 0 ? and(...where) : undefined)
     .orderBy(desc(schema.users.createdAt));
+
+  // Total absoluto sin filtros (para mostrar contador "X de Y")
+  const totalRows = await db
+    .select({ c: sql<number>`count(*)` })
+    .from(schema.users)
+    .where(ne(schema.users.status, "deleted"));
+  const totalActive = Number(totalRows[0]?.c ?? 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -55,18 +100,16 @@ export default async function UsuariosPage({
         <div>
           <h1 className="text-2xl font-bold">Usuarios</h1>
           <p className="text-muted-foreground text-sm">
-            {users.length} usuarios{includeDeleted ? " (incluye eliminados)" : ""}
+            {users.length} de {totalActive} usuarios activos
+            {includeDeleted ? " (incluye eliminados)" : ""}
+            {(q ||
+              roleFilter ||
+              statusFilter ||
+              accountTypeFilter) &&
+              " · filtros aplicados"}
           </p>
         </div>
         <div className="flex gap-2 items-center">
-          <Link
-            href={
-              includeDeleted ? "/usuarios" : "/usuarios?includeDeleted=true"
-            }
-            className="text-xs border border-border rounded px-3 py-2 hover:bg-muted"
-          >
-            {includeDeleted ? "Ocultar eliminados" : "Mostrar eliminados"}
-          </Link>
           <Link
             href="/usuarios/nuevo"
             className="bg-brand text-brand-foreground rounded px-4 py-2 text-sm hover:opacity-90"
@@ -75,6 +118,16 @@ export default async function UsuariosPage({
           </Link>
         </div>
       </div>
+
+      <UsuariosFilters
+        initial={{
+          q,
+          role: roleFilter,
+          status: statusFilter,
+          accountType: accountTypeFilter,
+          includeDeleted,
+        }}
+      />
 
       <div className="bg-card border border-border rounded-lg overflow-x-auto">
         <table className="w-full text-sm">
@@ -139,6 +192,7 @@ export default async function UsuariosPage({
                       userId={u.id}
                       status={u.status}
                       isSelf={u.id === me.id}
+                      hasEmail={Boolean(u.email)}
                     />
                   </td>
                 </tr>

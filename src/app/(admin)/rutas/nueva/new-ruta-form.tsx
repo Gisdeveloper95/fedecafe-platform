@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useDialog } from "@/components/ui/modal";
+
 type Operario = { id: string; username: string; fullName: string };
 
 function parseCodes(raw: string): string[] {
@@ -18,6 +20,7 @@ function parseCodes(raw: string): string[] {
 
 export function NewRutaForm({ operarios }: { operarios: Operario[] }) {
   const router = useRouter();
+  const dialog = useDialog();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -62,9 +65,14 @@ export function NewRutaForm({ operarios }: { operarios: Operario[] }) {
     }
 
     if (data.missingCodes?.length > 0) {
-      alert(
-        `Ruta creada, pero ${data.missingCodes.length} codigos no existen en la BD:\n${data.missingCodes.slice(0, 20).join(", ")}${data.missingCodes.length > 20 ? "..." : ""}`,
-      );
+      await dialog.alert({
+        title: "Ruta creada con códigos faltantes",
+        message:
+          `${data.missingCodes.length} códigos no existen en la base de datos:\n\n` +
+          data.missingCodes.slice(0, 20).join(", ") +
+          (data.missingCodes.length > 20 ? "..." : ""),
+        tone: "warning",
+      });
     }
 
     router.push(`/rutas/${data.ruta.id}`);

@@ -1,10 +1,12 @@
-import { and, lt } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 
 import { db, schema } from "@/db/client";
 import { env } from "@/lib/env";
 import { json, jsonError } from "@/lib/api/json";
 import { cleanupExpiredKeys } from "@/lib/idempotency";
 import { deleteObject, isR2Configured } from "@/lib/storage/r2";
+
+const DEMO_TOKEN_REVOKED_GRACE_DAYS = 30;
 
 /**
  * Cron diario:
@@ -32,12 +34,31 @@ export async function GET(request: Request) {
     idempotencyKeysDeleted: number;
     orphansDeleted: number;
     capturesScanned: number;
+    revokedDemoTokensDeleted: number;
     skipped?: string;
   } = {
     idempotencyKeysDeleted: expired,
     orphansDeleted: 0,
     capturesScanned: 0,
+    revokedDemoTokensDeleted: 0,
   };
+
+  // Auto-borrar demo_tokens revocados con >30 días en revocación
+  // (los identificamos por createdAt — si fue revocado, lleva tiempo dado de baja).
+  // Para mayor precisión usamos createdAt < hace 30 días + isRevoked = true.
+  const demoCutoff = new Date(
+    Date.now() - DEMO_TOKEN_REVOKED_GRACE_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const deletedRevoked = await db
+    .delete(schema.demoTokens)
+    .where(
+      and(
+        eq(schema.demoTokens.isRevoked, true),
+        lt(schema.demoTokens.createdAt, demoCutoff),
+      ),
+    )
+    .returning({ code: schema.demoTokens.code });
+  result.revokedDemoTokensDeleted = deletedRevoked.length;
 
   if (!isR2Configured()) {
     result.skipped = "r2_not_configured";

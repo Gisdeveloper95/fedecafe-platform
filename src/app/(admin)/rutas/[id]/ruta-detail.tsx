@@ -4,6 +4,9 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useDialog } from "@/components/ui/modal";
+import { useToast } from "@/components/ui/toast";
+
 type Ruta = {
   id: string;
   nombre: string;
@@ -37,6 +40,8 @@ export function RutaDetail({
   canEdit: boolean;
 }) {
   const router = useRouter();
+  const dialog = useDialog();
+  const toast = useToast();
   const [estado, setEstado] = useState(ruta.estado);
   const [loadingEstado, setLoadingEstado] = useState(false);
 
@@ -50,20 +55,29 @@ export function RutaDetail({
     setLoadingEstado(false);
     if (res.ok) {
       setEstado(nuevo);
+      toast.success("Estado actualizado");
       router.refresh();
     } else {
-      alert("Error al cambiar estado");
+      toast.error("No se pudo cambiar el estado");
     }
   }
 
   async function eliminar() {
-    if (!confirm("Eliminar esta ruta? No se puede deshacer.")) return;
+    const ok = await dialog.confirm({
+      title: "Eliminar ruta",
+      message:
+        "Esta acción no se puede deshacer. La ruta y sus items se eliminan, pero los recorridos GPS asociados se conservan.",
+      danger: true,
+      confirmLabel: "Eliminar",
+    });
+    if (!ok) return;
     const res = await fetch(`/api/rutas/${ruta.id}`, { method: "DELETE" });
     if (res.ok) {
+      toast.success("Ruta eliminada");
       router.push("/rutas");
       router.refresh();
     } else {
-      alert("Error al eliminar");
+      toast.error("No se pudo eliminar la ruta");
     }
   }
 

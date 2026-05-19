@@ -3,26 +3,32 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useDialog } from "@/components/ui/modal";
+import { useToast } from "@/components/ui/toast";
+
 export function TokenRowActions({ code }: { code: string }) {
   const router = useRouter();
+  const dialog = useDialog();
+  const toast = useToast();
   const [loading, setLoading] = useState(false);
 
   async function revoke() {
-    if (
-      !confirm(
-        `Revocar el token ${code}? Los usuarios demo activos con este código serán suspendidos.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await dialog.confirm({
+      title: "Revocar token demo",
+      message: `Revocar el token ${code}? Los usuarios demo activos con este código serán suspendidos.`,
+      danger: true,
+      confirmLabel: "Revocar",
+    });
+    if (!ok) return;
     setLoading(true);
     const res = await fetch(`/api/demo-tokens/${code}`, { method: "DELETE" });
     setLoading(false);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert(data?.error ?? "Error");
+      toast.error(data?.error ?? "No se pudo revocar el token");
       return;
     }
+    toast.success("Token revocado y demos suspendidos");
     router.refresh();
   }
 

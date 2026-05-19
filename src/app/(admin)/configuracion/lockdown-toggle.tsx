@@ -3,21 +3,31 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { useDialog } from "@/components/ui/modal";
+import { useToast } from "@/components/ui/toast";
+
 export function LockdownToggle({
   initialEnabled,
 }: {
   initialEnabled: boolean;
 }) {
   const router = useRouter();
+  const dialog = useDialog();
+  const toast = useToast();
   const [enabled, setEnabled] = useState(initialEnabled);
   const [loading, setLoading] = useState(false);
 
   async function toggle() {
     const next = !enabled;
-    const msg = next
-      ? "Activar kill switch global? Esto bloquea a todos los usuarios no-admin en sus próximas llamadas."
-      : "Desactivar kill switch global y restaurar el acceso?";
-    if (!confirm(msg)) return;
+    const ok = await dialog.confirm({
+      title: next ? "Activar kill switch global" : "Desactivar kill switch",
+      message: next
+        ? "Esto bloquea a todos los usuarios no-admin en sus próximas llamadas al servidor o renovaciones de sesión. Solo úsalo en caso de incidente o suspensión general."
+        : "El sistema volverá a permitir el acceso normal a todos los usuarios.",
+      danger: next,
+      confirmLabel: next ? "Activar bloqueo" : "Restaurar acceso",
+    });
+    if (!ok) return;
 
     setLoading(true);
     const res = await fetch("/api/admin/lockdown", {
@@ -27,10 +37,11 @@ export function LockdownToggle({
     });
     setLoading(false);
     if (!res.ok) {
-      alert("Error al cambiar el estado.");
+      toast.error("No se pudo cambiar el estado del kill switch");
       return;
     }
     setEnabled(next);
+    toast.success(next ? "Bloqueo global activo" : "Acceso restaurado");
     router.refresh();
   }
 

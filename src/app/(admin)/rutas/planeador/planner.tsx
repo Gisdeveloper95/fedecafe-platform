@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import "leaflet/dist/leaflet.css";
 
+import { useDialog } from "@/components/ui/modal";
+
 type Operario = { id: string; username: string; fullName: string };
 type Municipio = { nombre: string; total: number };
 type Punto = {
@@ -18,6 +20,7 @@ type LeafletNS = typeof import("leaflet");
 
 export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   const router = useRouter();
+  const dialog = useDialog();
 
   // Form de la ruta
   const [nombre, setNombre] = useState("");
@@ -222,8 +225,15 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
     });
   }
 
-  function clearAll() {
-    if (seleccion.length > 0 && !confirm("¿Vaciar la selección?")) return;
+  async function clearAll() {
+    if (seleccion.length === 0) return;
+    const ok = await dialog.confirm({
+      title: "Vaciar selección",
+      message: `Se quitarán los ${seleccion.length} puntos de la ruta en construcción. ¿Continuar?`,
+      danger: true,
+      confirmLabel: "Vaciar",
+    });
+    if (!ok) return;
     setSeleccion([]);
   }
 
