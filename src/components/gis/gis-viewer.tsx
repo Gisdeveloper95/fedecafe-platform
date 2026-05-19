@@ -9,21 +9,21 @@ import type {
   LayerSpec,
 } from "./types";
 
+type InitialView =
+  | { mode: "fit"; padding?: number }
+  | { mode: "fixed"; lat: number; lon: number; zoom: number };
+
 type Props = {
   layers: LayerSpec[];
-  /// Si true y hay un feature en `selectedFeatureIds`, ese marker se renderiza
-  /// como un DOM marker draggable. El resto se renderizan como capa de círculos
-  /// nativa (rápida para miles de puntos).
+  /// Si true y hay un feature seleccionado, se renderiza como DOM marker
+  /// draggable encima de la capa circle. El resto va siempre en la capa nativa.
   editable?: boolean;
   selectedFeatureIds?: Record<string, Set<string>>;
-  initialView?:
-    | { mode: "fit"; padding?: number }
-    | { mode: "fixed"; lat: number; lon: number; zoom: number };
+  initialView?: InitialView;
   showLayerToggle?: boolean;
   showCoords?: boolean;
 } & GisViewerHandlers;
 
-// Estilo OSM raster (gratis, sin API key).
 const OSM_STYLE = {
   version: 8 as const,
   sources: {
@@ -42,30 +42,45 @@ const OSM_STYLE = {
   layers: [{ id: "osm", type: "raster" as const, source: "osm" }],
 };
 
-export function GisViewer({
-  layers,
-  editable = false,
-  selectedFeatureIds,
-  initialView = { mode: "fit", padding: 60 },
-  showLayerToggle = true,
-  showCoords = false,
-  onFeatureClick,
-  onMapClick,
-  onPointMoved,
-}: Props) {
+const DEFAULT_VIEW: InitialView = { mode: "fit", padding: 60 };
+
+export function GisViewer(props: Props) {
+  const {
+    layers,
+    editable = false,
+    selectedFeatureIds,
+    showLayerToggle = true,
+    showCoords = false,
+    onFeatureClick,
+    onMapClick,
+    onPointMoved,
+  } = props;
+  // initialView lo resolvemos sin destructure-default para no romper la
+  // identidad referencial en cada render del padre (eso disparaba el efecto
+  // de capas en cada render y apilaba listeners "once" zombie).
+  const initialView: InitialView = props.initialView ?? DEFAULT_VIEW;
+
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("maplibre-gl").Map | null>(null);
   const dragMarkersRef = useRef<Array<import("maplibre-gl").Marker>>([]);
   const fittedRef = useRef(false);
-  const styleReadyRef = useRef(false);
+  const layerClickHandlersRef = useRef<
+    Array<{
+      layerId: string;
+      handler: (e: unknown) => void;
+    }>
+  >([]);
 
-  // Estados de visibilidad por capa
+  // mapReady dispara re-render cuando el map.on("load") fire → permite que el
+  // efecto de capas corra DESPUÉS de que el style esté listo, sin depender de
+  // `once` que sólo se dispara una vez.
+  const [mapReady, setMapReady] = useState(false);
+
   const [layerVis, setLayerVis] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     for (const l of layers) init[l.id] = l.visible ?? true;
     return init;
   });
-
   useEffect(() => {
     setLayerVis((prev) => {
       const next = { ...prev };
@@ -102,17 +117,19 @@ export function GisViewer({
       map.addControl(new maplibregl.ScaleControl(), "bottom-left");
 
       map.on("load", () => {
-        styleReadyRef.current = true;
+        if (cancelled) return;
+        setMapReady(true);
       });
 
-      // Click vacío del mapa (cuando no cae en ninguna capa nuestra)
+      // Click vacío
       map.on("click", (e) => {
-        if (!mapRef.current) return;
-        // Si el click cae sobre una capa nuestra, el handler de la capa
-        // ya tomó el evento (registramos handlers por layer-id abajo).
         const ourLayers = (map.getStyle().layers ?? [])
           .map((l) => l.id)
           .filter((id) => id.startsWith("gv-"));
+        if (ourLayers.length === 0) {
+          onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+          return;
+        }
         const feats = map.queryRenderedFeatures(e.point, {
           layers: ourLayers,
         });
@@ -132,20 +149,35 @@ export function GisViewer({
       cancelled = true;
       mapRef.current?.remove();
       mapRef.current = null;
-      styleReadyRef.current = false;
+      setMapReady(false);
+      fittedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // -------- Pintar capas cada vez que cambian --------
+  // -------- Pintar capas (corre solo cuando map está listo) --------
   useEffect(() => {
+    if (!mapReady) return;
     const map = mapRef.current;
     if (!map) return;
 
-    const apply = async () => {
-      const maplibregl = (await import("maplibre-gl")).default;
+    let cancelled = false;
 
-      // Limpiar layers/sources previas nuestras
+    (async () => {
+      const maplibregl = (await import("maplibre-gl")).default;
+      if (cancelled || !mapRef.current) return;
+
+      // Limpiar handlers de click previos
+      for (const { layerId, handler } of layerClickHandlersRef.current) {
+        try {
+          map.off("click", layerId, handler as never);
+        } catch {
+          /* layer ya no existe */
+        }
+      }
+      layerClickHandlersRef.current = [];
+
+      // Limpiar layers/sources previas
       const style = map.getStyle();
       const ourLayerIds = (style.layers ?? [])
         .map((l) => l.id)
@@ -160,7 +192,7 @@ export function GisViewer({
         if (map.getSource(id)) map.removeSource(id);
       }
 
-      // Limpiar markers DOM previos (solo se usan para el seleccionado en modo edit)
+      // Limpiar markers DOM previos
       for (const m of dragMarkersRef.current) m.remove();
       dragMarkersRef.current = [];
 
@@ -168,7 +200,6 @@ export function GisViewer({
         if (layerVis[layer.id] === false) continue;
 
         if (layer.kind === "points") {
-          // Capa nativa de círculos — escala a 100K+ puntos sin trabarse
           const sourceId = `gv-${layer.id}-src`;
           const layerCirclesId = `gv-${layer.id}-circles`;
           const layerSelectedId = `gv-${layer.id}-selected`;
@@ -181,8 +212,6 @@ export function GisViewer({
           const featuresAsGeoJson: GeoJSON.FeatureCollection = {
             type: "FeatureCollection",
             features: layer.features
-              // En modo edit, sacamos el seleccionado del source para mostrarlo
-              // como DOM marker draggable arriba.
               .filter((f) => f.id !== editableSelected)
               .map((f) => ({
                 type: "Feature",
@@ -200,7 +229,6 @@ export function GisViewer({
             data: featuresAsGeoJson,
           });
 
-          // Círculos no seleccionados
           map.addLayer({
             id: layerCirclesId,
             type: "circle",
@@ -215,7 +243,6 @@ export function GisViewer({
             },
           });
 
-          // Círculos seleccionados (más grandes, contorno destacado)
           map.addLayer({
             id: layerSelectedId,
             type: "circle",
@@ -230,7 +257,6 @@ export function GisViewer({
             },
           });
 
-          // Click handlers para ambos sub-layers
           const handleClick = (
             e: import("maplibre-gl").MapMouseEvent & {
               features?: GeoJSON.Feature[];
@@ -250,6 +276,15 @@ export function GisViewer({
           };
           map.on("click", layerCirclesId, handleClick);
           map.on("click", layerSelectedId, handleClick);
+          layerClickHandlersRef.current.push({
+            layerId: layerCirclesId,
+            handler: handleClick as never,
+          });
+          layerClickHandlersRef.current.push({
+            layerId: layerSelectedId,
+            handler: handleClick as never,
+          });
+
           map.on("mouseenter", layerCirclesId, () => {
             map.getCanvas().style.cursor = "pointer";
           });
@@ -257,7 +292,6 @@ export function GisViewer({
             map.getCanvas().style.cursor = "";
           });
 
-          // DOM marker draggable para el seleccionado en modo edit
           if (editableSelected) {
             const feat = layer.features.find((f) => f.id === editableSelected);
             if (feat) {
@@ -319,7 +353,11 @@ export function GisViewer({
               "line-opacity": 0.85,
             },
           });
-          map.on("click", layerId, (e) => {
+          const handleClick = (
+            e: import("maplibre-gl").MapMouseEvent & {
+              features?: GeoJSON.Feature[];
+            },
+          ) => {
             const feat = e.features?.[0];
             if (!feat) return;
             const id = String(feat.properties?.id ?? "");
@@ -331,6 +369,11 @@ export function GisViewer({
                 kind: "line",
               });
             }
+          };
+          map.on("click", layerId, handleClick);
+          layerClickHandlersRef.current.push({
+            layerId,
+            handler: handleClick as never,
           });
           map.on("mouseenter", layerId, () => {
             map.getCanvas().style.cursor = "pointer";
@@ -341,7 +384,7 @@ export function GisViewer({
         }
       }
 
-      // Auto-fit a las features visibles (solo la primera vez)
+      // Auto-fit la primera vez que hay features visibles
       if (initialView.mode === "fit" && !fittedRef.current) {
         const lngLats: [number, number][] = [];
         for (const layer of layers) {
@@ -380,14 +423,13 @@ export function GisViewer({
           fittedRef.current = true;
         }
       }
-    };
+    })();
 
-    if (styleReadyRef.current && map.isStyleLoaded()) {
-      apply();
-    } else {
-      map.once("load", apply);
-    }
+    return () => {
+      cancelled = true;
+    };
   }, [
+    mapReady,
     layers,
     layerVis,
     editable,
@@ -431,6 +473,12 @@ export function GisViewer({
               </span>
             </label>
           ))}
+        </div>
+      )}
+
+      {!mapReady && (
+        <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground pointer-events-none">
+          Cargando mapa...
         </div>
       )}
 

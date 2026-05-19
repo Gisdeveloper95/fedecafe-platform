@@ -117,12 +117,14 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   useEffect(() => {
     fetch("/api/municipios", { cache: "no-store" })
       .then((r) => r.json())
-      .then((d) => {
-        setMunicipios(d.municipios ?? []);
-        if (d.municipios?.[0]) setMunicipioSel(d.municipios[0].nombre);
-      })
+      .then((d) => setMunicipios(d.municipios ?? []))
       .catch(() => {});
   }, []);
+
+  // Toggle visibilidad de la capa de referencia (puntos del municipio en el
+  // mapa, NO los stops ya seleccionados). Útil para limpiar el mapa cuando hay
+  // miles de puntos y solo quieres ver lo que ya armaste.
+  const [showRefLayer, setShowRefLayer] = useState(true);
 
   // Init map
   useEffect(() => {
@@ -181,31 +183,53 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
     };
   }, []);
 
-  // Cargar puntos
+  // Cargar puntos. Reglas:
+  //  - Si hay texto en `search` (>=2 chars): consulta server con q= y SIN
+  //    filtro de municipio. Esto deja al buscador encontrar códigos de
+  //    cualquier municipio (la queja del operario fue exactamente esa).
+  //  - Si no hay búsqueda pero sí municipio: carga puntos de ese municipio
+  //    para tenerlos como referencia en el mapa.
+  //  - Si no hay ni búsqueda ni municipio: no carga (sería demasiado).
   useEffect(() => {
-    if (!municipioSel) return;
-    setLoadingPoints(true);
-    const endpoint =
-      tipo === "medidores" ? "/api/medidores" : "/api/estructuras";
-    fetch(`${endpoint}?municipio=${encodeURIComponent(municipioSel)}&limit=2000`)
-      .then((r) => r.json())
-      .then((d) => {
-        const list = (tipo === "medidores" ? d.medidores : d.estructuras) ?? [];
-        const items: EntityPunto[] = list.map(
-          (i: Record<string, unknown>) => ({
-            kind: "entity" as const,
-            codigo:
-              tipo === "medidores" ? String(i.contrato) : String(i.codigo),
-            lat: Number(i.latitude),
-            lon: Number(i.longitude),
-            nombre: (i.nombre as string | null) ?? null,
-          }),
-        );
-        setPuntos(items);
-        setLoadingPoints(false);
-      })
-      .catch(() => setLoadingPoints(false));
-  }, [municipioSel, tipo]);
+    const q = search.trim();
+    const useSearch = q.length >= 2;
+    if (!useSearch && !municipioSel) {
+      setPuntos([]);
+      return;
+    }
+    const handle = setTimeout(() => {
+      setLoadingPoints(true);
+      const endpoint =
+        tipo === "medidores" ? "/api/medidores" : "/api/estructuras";
+      const params = new URLSearchParams();
+      if (useSearch) {
+        params.set("q", q);
+        params.set("limit", "200");
+      } else {
+        params.set("municipio", municipioSel);
+        params.set("limit", "2000");
+      }
+      fetch(`${endpoint}?${params.toString()}`, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((d) => {
+          const list = (tipo === "medidores" ? d.medidores : d.estructuras) ?? [];
+          const items: EntityPunto[] = list.map(
+            (i: Record<string, unknown>) => ({
+              kind: "entity" as const,
+              codigo:
+                tipo === "medidores" ? String(i.contrato) : String(i.codigo),
+              lat: Number(i.latitude),
+              lon: Number(i.longitude),
+              nombre: (i.nombre as string | null) ?? null,
+            }),
+          );
+          setPuntos(items);
+          setLoadingPoints(false);
+        })
+        .catch(() => setLoadingPoints(false));
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [municipioSel, tipo, search]);
 
   const fittedRef = useRef(false);
   useEffect(() => {
@@ -222,7 +246,12 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
     if (!L || !map || !group) return;
     group.clearLayers();
 
-    for (const p of puntos) {
+    // Render puntos de referencia + los ya seleccionados (stops kind=entity).
+    // Si showRefLayer=false, solo mostramos los que ya están en stops.
+    const renderable = showRefLayer
+      ? puntos
+      : puntos.filter((p) => stopCodes.has(p.codigo));
+    for (const p of renderable) {
       const isSelected = stopCodes.has(p.codigo);
       const ordenInStops = stops.findIndex((s) => s.codigo === p.codigo);
       const marker = L.circleMarker([p.lat, p.lon], {
@@ -315,7 +344,7 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
       fittedRef.current = true;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [puntos, stops, stopCodes, startPoint]);
+  }, [puntos, stops, stopCodes, startPoint, showRefLayer]);
 
   function toggleStop(p: EntityPunto) {
     setStops((prev) => {
@@ -649,17 +678,37 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
                 ))}
             </select>
           </div>
-          <select
-            value={municipioSel}
-            onChange={(e) => setMunicipioSel(e.target.value)}
-            className="border border-border rounded px-3 py-2 bg-background text-sm"
-          >
-            {municipios.map((m) => (
-              <option key={m.nombre} value={m.nombre}>
-                {m.nombre} ({m.total})
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-muted-foreground">
+              Municipio (opcional — para precargar puntos como referencia)
+            </label>
+            <select
+              value={municipioSel}
+              onChange={(e) => setMunicipioSel(e.target.value)}
+              className="border border-border rounded px-3 py-2 bg-background text-sm"
+            >
+              <option value="">Todos / ninguno — busca por código abajo</option>
+              {municipios.map((m) => (
+                <option key={m.nombre} value={m.nombre}>
+                  {m.nombre} ({m.total})
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-muted-foreground">
+              Una ruta puede mezclar puntos de varios municipios — el buscador
+              encuentra códigos en toda la base, no se limita a este filtro.
+            </p>
+          </div>
+          <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showRefLayer}
+              onChange={(e) => setShowRefLayer(e.target.checked)}
+            />
+            <span>
+              Mostrar capa de referencia ({puntos.length} {tipo}) en el mapa
+            </span>
+          </label>
           <label className="flex flex-col gap-1 text-xs">
             <span className="text-muted-foreground">
               Fecha objetivo (opcional)
