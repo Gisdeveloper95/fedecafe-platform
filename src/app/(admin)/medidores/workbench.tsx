@@ -203,6 +203,7 @@ export function MedidoresWorkbench() {
           onFeatureClick={handleFeatureClick}
           onPointMoved={handlePointMoved}
           showCoords
+          pointIconByLayer={{ medidores: "💧" }}
         />
         {loading && (
           <div className="absolute top-2 right-2 bg-card border border-border rounded px-3 py-1.5 text-xs shadow z-10">

@@ -67,18 +67,40 @@ function saveFavorites(favs: StartFavorite[]) {
 
 type Mode = "select" | "addStart" | "addWaypoint";
 
-export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
+type InitialRouteData = {
+  id: string;
+  nombre: string;
+  tipo: "medidores" | "estructuras";
+  operarioIds: string[];
+  notas: string | null;
+  fechaObjetivo: string | null;
+  startPoint: StartPoint | null;
+  stops: StopItem[];
+};
+
+export function RoutePlanner({
+  operarios,
+  initial,
+}: {
+  operarios: Operario[];
+  initial?: InitialRouteData;
+}) {
   const router = useRouter();
   const dialog = useDialog();
   const toast = useToast();
 
-  const [nombre, setNombre] = useState("");
+  const editMode = initial != null;
+  const [nombre, setNombre] = useState(initial?.nombre ?? "");
   const [operarioIds, setOperarioIds] = useState<string[]>(
-    operarios[0] ? [operarios[0].id] : [],
+    initial?.operarioIds ?? (operarios[0] ? [operarios[0].id] : []),
   );
-  const [tipo, setTipo] = useState<"medidores" | "estructuras">("medidores");
-  const [notas, setNotas] = useState("");
-  const [fechaObjetivo, setFechaObjetivo] = useState<string>("");
+  const [tipo, setTipo] = useState<"medidores" | "estructuras">(
+    initial?.tipo ?? "medidores",
+  );
+  const [notas, setNotas] = useState(initial?.notas ?? "");
+  const [fechaObjetivo, setFechaObjetivo] = useState<string>(
+    initial?.fechaObjetivo ?? "",
+  );
 
   const [municipios, setMunicipios] = useState<Municipio[]>([]);
   const [municipioSel, setMunicipioSel] = useState<string>("");
@@ -97,8 +119,10 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   // estén pintados todos.
   const [totalInDb, setTotalInDb] = useState<number | null>(null);
 
-  const [startPoint, setStartPoint] = useState<StartPoint | null>(null);
-  const [stops, setStops] = useState<StopItem[]>([]);
+  const [startPoint, setStartPoint] = useState<StartPoint | null>(
+    initial?.startPoint ?? null,
+  );
+  const [stops, setStops] = useState<StopItem[]>(initial?.stops ?? []);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
 
   const [favorites, setFavorites] = useState<StartFavorite[]>([]);
@@ -203,16 +227,17 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   }, []);
 
   // Cargar puntos. Reglas:
-  //  - Si hay texto en `search` (>=2 chars): consulta server con q= y SIN
-  //    filtro de municipio. Esto deja al buscador encontrar códigos de
-  //    cualquier municipio (la queja del operario fue exactamente esa).
-  //  - Si no hay búsqueda pero sí municipio: carga puntos de ese municipio
-  //    para tenerlos como referencia en el mapa.
-  //  - Si no hay ni búsqueda ni municipio: no carga (sería demasiado).
+  //  - Si hay texto en `search` (>=2 chars): consulta server con q= SIN
+  //    filtro de municipio. El buscador encuentra códigos en toda la base
+  //    independientemente del filtro de municipio seleccionado.
+  //  - Si no hay búsqueda y el toggle de referencia está ON: carga puntos
+  //    para mostrar en el mapa. Si hay municipio, filtra. Si no, carga los
+  //    primeros 2000 (limit del API) como muestra.
+  //  - Si no hay búsqueda y el toggle está OFF: no carga.
   useEffect(() => {
     const q = search.trim();
     const useSearch = q.length >= 2;
-    if (!useSearch && !municipioSel) {
+    if (!useSearch && !showRefLayer) {
       setPuntos([]);
       return;
     }
@@ -225,7 +250,7 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
         params.set("q", q);
         params.set("limit", "200");
       } else {
-        params.set("municipio", municipioSel);
+        if (municipioSel) params.set("municipio", municipioSel);
         params.set("limit", "2000");
       }
       fetch(`${endpoint}?${params.toString()}`, { cache: "no-store" })
@@ -249,7 +274,7 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
         .catch(() => setLoadingPoints(false));
     }, 250);
     return () => clearTimeout(handle);
-  }, [municipioSel, tipo, search]);
+  }, [municipioSel, tipo, search, showRefLayer]);
 
   const fittedRef = useRef(false);
   useEffect(() => {
@@ -541,19 +566,21 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
         fechaObjetivo: fechaObjetivo || undefined,
         notas: notas || undefined,
       };
-      const res = await fetch("/api/rutas", {
-        method: "POST",
+      const url = editMode ? `/api/rutas/${initial.id}` : "/api/rutas";
+      const method = editMode ? "PATCH" : "POST";
+      const res = await fetch(url, {
+        method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data?.error ?? "Error al crear ruta");
+        toast.error(data?.error ?? (editMode ? "Error al actualizar ruta" : "Error al crear ruta"));
         setSubmitting(false);
         return;
       }
-      toast.success("Ruta creada");
-      router.push(`/rutas/${data.ruta.id}`);
+      toast.success(editMode ? "Ruta actualizada" : "Ruta creada");
+      router.push(`/rutas/${editMode ? initial.id : data.ruta.id}`);
       router.refresh();
     } catch (e) {
       toast.error("Error de red: " + e);
@@ -983,7 +1010,11 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
           disabled={submitting || stops.length === 0}
           className="bg-brand text-brand-foreground rounded px-4 py-2 text-sm font-medium hover:opacity-90 disabled:opacity-50 mt-auto"
         >
-          {submitting ? "Creando..." : `Crear ruta (${stops.length} puntos)`}
+          {submitting
+            ? editMode ? "Guardando..." : "Creando..."
+            : editMode
+              ? `Guardar cambios (${stops.length} puntos)`
+              : `Crear ruta (${stops.length} puntos)`}
         </button>
       </div>
     </div>

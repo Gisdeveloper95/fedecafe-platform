@@ -108,12 +108,20 @@ export function RutaDetail({
             </div>
           </div>
           {canEdit && (
-            <button
-              onClick={eliminar}
-              className="text-xs border border-destructive text-destructive rounded px-3 py-1 hover:bg-red-50"
-            >
-              Eliminar ruta
-            </button>
+            <div className="flex gap-2">
+              <Link
+                href={`/rutas/${ruta.id}/editar`}
+                className="text-xs border border-brand text-brand rounded px-3 py-1 hover:bg-brand/5"
+              >
+                Editar ruta
+              </Link>
+              <button
+                onClick={eliminar}
+                className="text-xs border border-destructive text-destructive rounded px-3 py-1 hover:bg-red-50"
+              >
+                Eliminar ruta
+              </button>
+            </div>
           )}
         </div>
       </div>

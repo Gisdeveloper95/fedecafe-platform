@@ -15,13 +15,15 @@ type InitialView =
 
 type Props = {
   layers: LayerSpec[];
-  /// Si true y hay un feature seleccionado, se renderiza como DOM marker
-  /// draggable encima de la capa circle. El resto va siempre en la capa nativa.
   editable?: boolean;
   selectedFeatureIds?: Record<string, Set<string>>;
   initialView?: InitialView;
   showLayerToggle?: boolean;
   showCoords?: boolean;
+  /// Icono Material-Symbols (texto) opcional para pintar dentro de cada
+  /// punto de una capa. Mapa de layerId → name (ej: "water_drop"). Si no
+  /// está, el visor usa un círculo plano (más rápido).
+  pointIconByLayer?: Record<string, string>;
 } & GisViewerHandlers;
 
 const OSM_STYLE = {
@@ -51,36 +53,42 @@ export function GisViewer(props: Props) {
     selectedFeatureIds,
     showLayerToggle = true,
     showCoords = false,
+    pointIconByLayer,
     onFeatureClick,
     onMapClick,
     onPointMoved,
   } = props;
-  // initialView lo resolvemos sin destructure-default para no romper la
-  // identidad referencial en cada render del padre (eso disparaba el efecto
-  // de capas en cada render y apilaba listeners "once" zombie).
   const initialView: InitialView = props.initialView ?? DEFAULT_VIEW;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<import("maplibre-gl").Map | null>(null);
   const dragMarkersRef = useRef<Array<import("maplibre-gl").Marker>>([]);
   const fittedRef = useRef(false);
-  const layerClickHandlersRef = useRef<
-    Array<{
-      layerId: string;
-      handler: (e: unknown) => void;
-    }>
-  >([]);
 
-  // mapReady dispara re-render cuando el map.on("load") fire → permite que el
-  // efecto de capas corra DESPUÉS de que el style esté listo, sin depender de
-  // `once` que sólo se dispara una vez.
-  const [mapReady, setMapReady] = useState(false);
+  // Refs para que el efecto de pintado vea siempre los valores más recientes
+  // sin tener que volver a montar el mapa. Esto evita el bug anterior donde
+  // initialView (objeto literal en el padre) re-disparaba el efecto y apilaba
+  // listeners zombie sobre map.once("load", ...).
+  const layersRef = useRef(layers);
+  const layerVisRef = useRef<Record<string, boolean>>({});
+  const selectedRef = useRef(selectedFeatureIds);
+  const editableRef = useRef(editable);
+  const handlersRef = useRef({ onFeatureClick, onMapClick, onPointMoved });
+  const pointIconRef = useRef(pointIconByLayer);
+
+  layersRef.current = layers;
+  selectedRef.current = selectedFeatureIds;
+  editableRef.current = editable;
+  handlersRef.current = { onFeatureClick, onMapClick, onPointMoved };
+  pointIconRef.current = pointIconByLayer;
 
   const [layerVis, setLayerVis] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     for (const l of layers) init[l.id] = l.visible ?? true;
     return init;
   });
+  layerVisRef.current = layerVis;
+
   useEffect(() => {
     setLayerVis((prev) => {
       const next = { ...prev };
@@ -96,348 +104,373 @@ export function GisViewer(props: Props) {
     lon: number;
   } | null>(null);
 
-  // -------- Init del mapa (una sola vez) --------
+  // Estado UI para mostrar progreso al usuario (no afecta lógica del mapa)
+  const [status, setStatus] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // -------- Init del mapa (UNA sola vez) + pintar capas dentro de "load" --------
   useEffect(() => {
     let cancelled = false;
+
     (async () => {
-      const maplibregl = (await import("maplibre-gl")).default;
-      if (cancelled || !containerRef.current || mapRef.current) return;
+      try {
+        const maplibregl = (await import("maplibre-gl")).default;
+        if (cancelled || !containerRef.current || mapRef.current) return;
 
-      const map = new maplibregl.Map({
-        container: containerRef.current,
-        style: OSM_STYLE,
-        center:
-          initialView.mode === "fixed"
-            ? [initialView.lon, initialView.lat]
-            : [-75.7, 4.5],
-        zoom: initialView.mode === "fixed" ? initialView.zoom : 7,
-      });
-      mapRef.current = map;
-      map.addControl(new maplibregl.NavigationControl(), "top-right");
-      map.addControl(new maplibregl.ScaleControl(), "bottom-left");
-
-      map.on("load", () => {
-        if (cancelled) return;
-        setMapReady(true);
-      });
-
-      // Click vacío
-      map.on("click", (e) => {
-        const ourLayers = (map.getStyle().layers ?? [])
-          .map((l) => l.id)
-          .filter((id) => id.startsWith("gv-"));
-        if (ourLayers.length === 0) {
-          onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
-          return;
-        }
-        const feats = map.queryRenderedFeatures(e.point, {
-          layers: ourLayers,
+        const map = new maplibregl.Map({
+          container: containerRef.current,
+          style: OSM_STYLE,
+          center:
+            initialView.mode === "fixed"
+              ? [initialView.lon, initialView.lat]
+              : [-75.7, 4.5],
+          zoom: initialView.mode === "fixed" ? initialView.zoom : 7,
         });
-        if (feats.length === 0) {
-          onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
-        }
-      });
+        mapRef.current = map;
+        map.addControl(new maplibregl.NavigationControl(), "top-right");
+        map.addControl(new maplibregl.ScaleControl(), "bottom-left");
 
-      if (showCoords) {
-        map.on("mousemove", (e) => {
-          setCursorCoords({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+        map.on("error", (e) => {
+          console.error("[GisViewer] map error:", e);
+          if (!cancelled) {
+            setStatus("error");
+            setErrorMsg(
+              e?.error?.message ?? "Error desconocido cargando el mapa",
+            );
+          }
         });
-        map.on("mouseout", () => setCursorCoords(null));
+
+        const applyLayers = () => {
+          if (cancelled) return;
+          renderLayers(map, maplibregl);
+        };
+
+        map.on("load", () => {
+          if (cancelled) return;
+          setStatus("ready");
+          applyLayers();
+        });
+
+        // Re-pintar capas cuando cambian props (sin reset del mapa)
+        const interval = window.setInterval(() => {
+          if (cancelled) {
+            window.clearInterval(interval);
+            return;
+          }
+          if (!map.isStyleLoaded()) return;
+          if (map.__lastLayersHash === hashLayers(layersRef.current, layerVisRef.current, selectedRef.current))
+            return;
+          map.__lastLayersHash = hashLayers(layersRef.current, layerVisRef.current, selectedRef.current);
+          renderLayers(map, maplibregl);
+        }, 250);
+
+        // Click vacío
+        map.on("click", (e) => {
+          const ourLayers = (map.getStyle().layers ?? [])
+            .map((l) => l.id)
+            .filter((id) => id.startsWith("gv-"));
+          if (ourLayers.length === 0) {
+            handlersRef.current.onMapClick?.({
+              lat: e.lngLat.lat,
+              lon: e.lngLat.lng,
+            });
+            return;
+          }
+          const feats = map.queryRenderedFeatures(e.point, {
+            layers: ourLayers,
+          });
+          if (feats.length === 0) {
+            handlersRef.current.onMapClick?.({
+              lat: e.lngLat.lat,
+              lon: e.lngLat.lng,
+            });
+          }
+        });
+
+        if (showCoords) {
+          map.on("mousemove", (e) => {
+            setCursorCoords({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+          });
+          map.on("mouseout", () => setCursorCoords(null));
+        }
+      } catch (err) {
+        console.error("[GisViewer] init failed:", err);
+        if (!cancelled) {
+          setStatus("error");
+          setErrorMsg(String(err));
+        }
       }
     })();
+
     return () => {
       cancelled = true;
       mapRef.current?.remove();
       mapRef.current = null;
-      setMapReady(false);
       fittedRef.current = false;
+      for (const m of dragMarkersRef.current) m.remove();
+      dragMarkersRef.current = [];
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // -------- Pintar capas (corre solo cuando map está listo) --------
-  useEffect(() => {
-    if (!mapReady) return;
-    const map = mapRef.current;
-    if (!map) return;
+  // Función pura que pinta las capas en el mapa. Lee de refs para evitar
+  // closures stale.
+  function renderLayers(
+    map: import("maplibre-gl").Map,
+    maplibregl: typeof import("maplibre-gl"),
+  ) {
+    const currentLayers = layersRef.current;
+    const currentVis = layerVisRef.current;
+    const currentSelected = selectedRef.current;
+    const currentEditable = editableRef.current;
+    const currentHandlers = handlersRef.current;
+    const currentPointIcons = pointIconRef.current;
 
-    let cancelled = false;
+    // Limpieza
+    const style = map.getStyle();
+    const ourLayerIds = (style.layers ?? [])
+      .map((l) => l.id)
+      .filter((id) => id.startsWith("gv-"));
+    for (const id of ourLayerIds) {
+      if (map.getLayer(id)) map.removeLayer(id);
+    }
+    const ourSourceIds = Object.keys(style.sources ?? {}).filter((id) =>
+      id.startsWith("gv-"),
+    );
+    for (const id of ourSourceIds) {
+      if (map.getSource(id)) map.removeSource(id);
+    }
+    for (const m of dragMarkersRef.current) m.remove();
+    dragMarkersRef.current = [];
 
-    (async () => {
-      const maplibregl = (await import("maplibre-gl")).default;
-      if (cancelled || !mapRef.current) return;
+    for (const layer of currentLayers) {
+      if (currentVis[layer.id] === false) continue;
 
-      // Limpiar handlers de click previos
-      for (const { layerId, handler } of layerClickHandlersRef.current) {
-        try {
-          map.off("click", layerId, handler as never);
-        } catch {
-          /* layer ya no existe */
-        }
-      }
-      layerClickHandlersRef.current = [];
+      if (layer.kind === "points") {
+        const sourceId = `gv-${layer.id}-src`;
+        const circlesId = `gv-${layer.id}-circles`;
+        const selectedId = `gv-${layer.id}-selected`;
+        const symbolsId = `gv-${layer.id}-symbols`;
 
-      // Limpiar layers/sources previas
-      const style = map.getStyle();
-      const ourLayerIds = (style.layers ?? [])
-        .map((l) => l.id)
-        .filter((id) => id.startsWith("gv-"));
-      for (const id of ourLayerIds) {
-        if (map.getLayer(id)) map.removeLayer(id);
-      }
-      const ourSourceIds = Object.keys(style.sources ?? {}).filter((id) =>
-        id.startsWith("gv-"),
-      );
-      for (const id of ourSourceIds) {
-        if (map.getSource(id)) map.removeSource(id);
-      }
+        const selectedSet = currentSelected?.[layer.id];
+        const editableSelected =
+          currentEditable && selectedSet && selectedSet.size === 1
+            ? Array.from(selectedSet)[0]
+            : null;
 
-      // Limpiar markers DOM previos
-      for (const m of dragMarkersRef.current) m.remove();
-      dragMarkersRef.current = [];
-
-      for (const layer of layers) {
-        if (layerVis[layer.id] === false) continue;
-
-        if (layer.kind === "points") {
-          const sourceId = `gv-${layer.id}-src`;
-          const layerCirclesId = `gv-${layer.id}-circles`;
-          const layerSelectedId = `gv-${layer.id}-selected`;
-
-          const selectedSet = selectedFeatureIds?.[layer.id];
-          const selectedIds = selectedSet ? Array.from(selectedSet) : [];
-          const editableSelected =
-            editable && selectedIds.length === 1 ? selectedIds[0] : null;
-
-          const featuresAsGeoJson: GeoJSON.FeatureCollection = {
-            type: "FeatureCollection",
-            features: layer.features
-              .filter((f) => f.id !== editableSelected)
-              .map((f) => ({
-                type: "Feature",
-                properties: {
-                  id: f.id,
-                  label: f.label ?? "",
-                  selected: selectedSet?.has(f.id) ? 1 : 0,
-                },
-                geometry: { type: "Point", coordinates: [f.lon, f.lat] },
-              })),
-          };
-
-          map.addSource(sourceId, {
-            type: "geojson",
-            data: featuresAsGeoJson,
-          });
-
-          map.addLayer({
-            id: layerCirclesId,
-            type: "circle",
-            source: sourceId,
-            filter: ["==", ["get", "selected"], 0],
-            paint: {
-              "circle-radius": 5,
-              "circle-color": layer.color,
-              "circle-opacity": 0.85,
-              "circle-stroke-width": 1.5,
-              "circle-stroke-color": "#ffffff",
-            },
-          });
-
-          map.addLayer({
-            id: layerSelectedId,
-            type: "circle",
-            source: sourceId,
-            filter: ["==", ["get", "selected"], 1],
-            paint: {
-              "circle-radius": 8,
-              "circle-color": layer.color,
-              "circle-opacity": 1,
-              "circle-stroke-width": 3,
-              "circle-stroke-color": "#ffffff",
-            },
-          });
-
-          const handleClick = (
-            e: import("maplibre-gl").MapMouseEvent & {
-              features?: GeoJSON.Feature[];
-            },
-          ) => {
-            const feat = e.features?.[0];
-            if (!feat) return;
-            const id = String(feat.properties?.id ?? "");
-            const found = layer.features.find((x) => x.id === id);
-            if (found) {
-              onFeatureClick?.({
-                layerId: layer.id,
-                feature: found,
-                kind: "point",
-              });
-            }
-          };
-          map.on("click", layerCirclesId, handleClick);
-          map.on("click", layerSelectedId, handleClick);
-          layerClickHandlersRef.current.push({
-            layerId: layerCirclesId,
-            handler: handleClick as never,
-          });
-          layerClickHandlersRef.current.push({
-            layerId: layerSelectedId,
-            handler: handleClick as never,
-          });
-
-          map.on("mouseenter", layerCirclesId, () => {
-            map.getCanvas().style.cursor = "pointer";
-          });
-          map.on("mouseleave", layerCirclesId, () => {
-            map.getCanvas().style.cursor = "";
-          });
-
-          if (editableSelected) {
-            const feat = layer.features.find((f) => f.id === editableSelected);
-            if (feat) {
-              const el = document.createElement("div");
-              el.style.cssText = `
-                width: 22px;
-                height: 22px;
-                border-radius: 50%;
-                background: ${layer.color};
-                border: 3px solid white;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-                cursor: move;
-              `;
-              const marker = new maplibregl.Marker({
-                element: el,
-                draggable: true,
-              })
-                .setLngLat([feat.lon, feat.lat])
-                .addTo(map);
-              marker.on("dragend", () => {
-                const lngLat = marker.getLngLat();
-                onPointMoved?.(layer.id, feat.id, {
-                  lat: lngLat.lat,
-                  lon: lngLat.lng,
-                });
-              });
-              dragMarkersRef.current.push(marker);
-            }
-          }
-        } else if (layer.kind === "lines") {
-          const sourceId = `gv-${layer.id}-src`;
-          const layerId = `gv-${layer.id}`;
-          const featureCollection: GeoJSON.FeatureCollection = {
-            type: "FeatureCollection",
-            features: layer.features.map((f) => ({
+        const fc: GeoJSON.FeatureCollection = {
+          type: "FeatureCollection",
+          features: layer.features
+            .filter((f) => f.id !== editableSelected)
+            .map((f) => ({
               type: "Feature",
               properties: {
                 id: f.id,
                 label: f.label ?? "",
-                category: f.category ?? "",
+                selected: selectedSet?.has(f.id) ? 1 : 0,
               },
-              geometry: {
-                type: "LineString",
-                coordinates: f.vertices.map(([lat, lon]) => [lon, lat]),
-              },
+              geometry: { type: "Point", coordinates: [f.lon, f.lat] },
             })),
-          };
-          map.addSource(sourceId, {
-            type: "geojson",
-            data: featureCollection,
-          });
+        };
+
+        map.addSource(sourceId, { type: "geojson", data: fc });
+
+        map.addLayer({
+          id: circlesId,
+          type: "circle",
+          source: sourceId,
+          filter: ["==", ["get", "selected"], 0],
+          paint: {
+            "circle-radius": 6,
+            "circle-color": layer.color,
+            "circle-opacity": 0.9,
+            "circle-stroke-width": 2,
+            "circle-stroke-color": "#ffffff",
+          },
+        });
+        map.addLayer({
+          id: selectedId,
+          type: "circle",
+          source: sourceId,
+          filter: ["==", ["get", "selected"], 1],
+          paint: {
+            "circle-radius": 9,
+            "circle-color": layer.color,
+            "circle-opacity": 1,
+            "circle-stroke-width": 3,
+            "circle-stroke-color": "#ffffff",
+          },
+        });
+
+        // Icono opcional encima del punto (ej: gota de agua para medidores)
+        const iconChar = currentPointIcons?.[layer.id];
+        if (iconChar) {
           map.addLayer({
-            id: layerId,
-            type: "line",
+            id: symbolsId,
+            type: "symbol",
             source: sourceId,
+            layout: {
+              "text-field": iconChar,
+              "text-font": ["Open Sans Regular"],
+              "text-size": 11,
+              "text-allow-overlap": true,
+              "text-ignore-placement": true,
+            },
             paint: {
-              "line-color": layer.color,
-              "line-width": layer.width ?? 3,
-              "line-opacity": 0.85,
+              "text-color": "#ffffff",
             },
           });
-          const handleClick = (
-            e: import("maplibre-gl").MapMouseEvent & {
-              features?: GeoJSON.Feature[];
-            },
-          ) => {
-            const feat = e.features?.[0];
-            if (!feat) return;
-            const id = String(feat.properties?.id ?? "");
-            const found = layer.features.find((x) => x.id === id);
-            if (found) {
-              onFeatureClick?.({
-                layerId: layer.id,
-                feature: found,
-                kind: "line",
+        }
+
+        const handleClick = (
+          e: import("maplibre-gl").MapMouseEvent & {
+            features?: GeoJSON.Feature[];
+          },
+        ) => {
+          const feat = e.features?.[0];
+          if (!feat) return;
+          const id = String(feat.properties?.id ?? "");
+          const found = layer.features.find((x) => x.id === id);
+          if (found) {
+            currentHandlers.onFeatureClick?.({
+              layerId: layer.id,
+              feature: found,
+              kind: "point",
+            });
+          }
+        };
+        map.on("click", circlesId, handleClick);
+        map.on("click", selectedId, handleClick);
+        map.on("mouseenter", circlesId, () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", circlesId, () => {
+          map.getCanvas().style.cursor = "";
+        });
+
+        if (editableSelected) {
+          const feat = layer.features.find((f) => f.id === editableSelected);
+          if (feat) {
+            const el = document.createElement("div");
+            el.style.cssText = `
+              width: 22px;
+              height: 22px;
+              border-radius: 50%;
+              background: ${layer.color};
+              border: 3px solid white;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+              cursor: move;
+            `;
+            const marker = new maplibregl.Marker({
+              element: el,
+              draggable: true,
+            })
+              .setLngLat([feat.lon, feat.lat])
+              .addTo(map);
+            marker.on("dragend", () => {
+              const lngLat = marker.getLngLat();
+              currentHandlers.onPointMoved?.(layer.id, feat.id, {
+                lat: lngLat.lat,
+                lon: lngLat.lng,
               });
-            }
-          };
-          map.on("click", layerId, handleClick);
-          layerClickHandlersRef.current.push({
-            layerId,
-            handler: handleClick as never,
-          });
-          map.on("mouseenter", layerId, () => {
-            map.getCanvas().style.cursor = "pointer";
-          });
-          map.on("mouseleave", layerId, () => {
-            map.getCanvas().style.cursor = "";
-          });
+            });
+            dragMarkersRef.current.push(marker);
+          }
+        }
+      } else if (layer.kind === "lines") {
+        const sourceId = `gv-${layer.id}-src`;
+        const layerId = `gv-${layer.id}`;
+        const fc: GeoJSON.FeatureCollection = {
+          type: "FeatureCollection",
+          features: layer.features.map((f) => ({
+            type: "Feature",
+            properties: { id: f.id, label: f.label ?? "" },
+            geometry: {
+              type: "LineString",
+              coordinates: f.vertices.map(([lat, lon]) => [lon, lat]),
+            },
+          })),
+        };
+        map.addSource(sourceId, { type: "geojson", data: fc });
+        map.addLayer({
+          id: layerId,
+          type: "line",
+          source: sourceId,
+          paint: {
+            "line-color": layer.color,
+            "line-width": layer.width ?? 3,
+            "line-opacity": 0.85,
+          },
+        });
+        const handleClick = (
+          e: import("maplibre-gl").MapMouseEvent & {
+            features?: GeoJSON.Feature[];
+          },
+        ) => {
+          const feat = e.features?.[0];
+          if (!feat) return;
+          const id = String(feat.properties?.id ?? "");
+          const found = layer.features.find((x) => x.id === id);
+          if (found) {
+            currentHandlers.onFeatureClick?.({
+              layerId: layer.id,
+              feature: found,
+              kind: "line",
+            });
+          }
+        };
+        map.on("click", layerId, handleClick);
+        map.on("mouseenter", layerId, () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", layerId, () => {
+          map.getCanvas().style.cursor = "";
+        });
+      }
+    }
+
+    // Auto-fit la primera vez que hay features
+    if (initialView.mode === "fit" && !fittedRef.current) {
+      const lngLats: [number, number][] = [];
+      for (const layer of currentLayers) {
+        if (currentVis[layer.id] === false) continue;
+        if (layer.kind === "points") {
+          for (const f of layer.features) lngLats.push([f.lon, f.lat]);
+        } else {
+          for (const f of layer.features) {
+            for (const [lat, lon] of f.vertices) lngLats.push([lon, lat]);
+          }
         }
       }
-
-      // Auto-fit la primera vez que hay features visibles
-      if (initialView.mode === "fit" && !fittedRef.current) {
-        const lngLats: [number, number][] = [];
-        for (const layer of layers) {
-          if (layerVis[layer.id] === false) continue;
-          if (layer.kind === "points") {
-            for (const f of layer.features) lngLats.push([f.lon, f.lat]);
-          } else {
-            for (const f of layer.features) {
-              for (const [lat, lon] of f.vertices) lngLats.push([lon, lat]);
-            }
-          }
+      if (lngLats.length > 0) {
+        let west = lngLats[0][0],
+          east = lngLats[0][0],
+          south = lngLats[0][1],
+          north = lngLats[0][1];
+        for (const [lng, lat] of lngLats) {
+          if (lng < west) west = lng;
+          if (lng > east) east = lng;
+          if (lat < south) south = lat;
+          if (lat > north) north = lat;
         }
-        if (lngLats.length > 0) {
-          let west = lngLats[0][0],
-            east = lngLats[0][0],
-            south = lngLats[0][1],
-            north = lngLats[0][1];
-          for (const [lng, lat] of lngLats) {
-            if (lng < west) west = lng;
-            if (lng > east) east = lng;
-            if (lat < south) south = lat;
-            if (lat > north) north = lat;
-          }
-          if (lngLats.length === 1) {
-            map.setCenter(lngLats[0]);
-            map.setZoom(15);
-          } else {
-            map.fitBounds(
-              [
-                [west, south],
-                [east, north],
-              ],
-              { padding: initialView.padding ?? 60, animate: false },
-            );
-          }
-          fittedRef.current = true;
+        if (lngLats.length === 1) {
+          map.setCenter(lngLats[0]);
+          map.setZoom(15);
+        } else {
+          map.fitBounds(
+            [
+              [west, south],
+              [east, north],
+            ],
+            { padding: initialView.padding ?? 60, animate: false },
+          );
         }
+        fittedRef.current = true;
       }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    mapReady,
-    layers,
-    layerVis,
-    editable,
-    onFeatureClick,
-    onPointMoved,
-    initialView,
-    selectedFeatureIds,
-  ]);
+    }
+  }
 
   const totalsByLayer = useMemo(() => {
     const t: Record<string, number> = {};
@@ -445,8 +478,14 @@ export function GisViewer(props: Props) {
     return t;
   }, [layers]);
 
+  // Altura mínima garantizada — antes el contenedor podía colapsar a 0px
+  // si el padre no propagaba altura (bug que dejaba el visor invisible
+  // aunque MapLibre cargara bien).
   return (
-    <div className="relative w-full h-full bg-muted rounded-md overflow-hidden">
+    <div
+      className="relative w-full bg-muted rounded-md overflow-hidden"
+      style={{ minHeight: "500px", height: "100%" }}
+    >
       <div ref={containerRef} className="absolute inset-0" />
 
       {showLayerToggle && layers.length > 0 && (
@@ -476,9 +515,15 @@ export function GisViewer(props: Props) {
         </div>
       )}
 
-      {!mapReady && (
+      {status === "loading" && (
         <div className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground pointer-events-none">
-          Cargando mapa...
+          Cargando mapa…
+        </div>
+      )}
+      {status === "error" && (
+        <div className="absolute inset-0 flex items-center justify-center text-xs text-destructive z-20 bg-card/80 p-4 text-center">
+          Error cargando el mapa.<br />
+          <span className="font-mono">{errorMsg}</span>
         </div>
       )}
 
@@ -489,4 +534,29 @@ export function GisViewer(props: Props) {
       )}
     </div>
   );
+}
+
+function hashLayers(
+  layers: LayerSpec[],
+  vis: Record<string, boolean>,
+  selected?: Record<string, Set<string>>,
+): string {
+  const parts: string[] = [];
+  for (const l of layers) {
+    parts.push(
+      `${l.id}:${vis[l.id] !== false ? 1 : 0}:${l.features.length}`,
+    );
+    if (selected?.[l.id]) {
+      parts.push(`s=${Array.from(selected[l.id]).slice(0, 5).join(",")}`);
+    }
+  }
+  return parts.join("|");
+}
+
+// Decoración para que TS no se queje del campo custom que pegamos a la
+// instancia del mapa para evitar re-renders innecesarios.
+declare module "maplibre-gl" {
+  interface Map {
+    __lastLayersHash?: string;
+  }
 }
