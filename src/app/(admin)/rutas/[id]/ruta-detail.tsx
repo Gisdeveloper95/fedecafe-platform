@@ -7,6 +7,8 @@ import { useRouter } from "next/navigation";
 import { useDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 
+import { RutaSugeridaViewer } from "./ruta-sugerida-viewer";
+
 type Ruta = {
   id: string;
   nombre: string;
@@ -32,11 +34,13 @@ export function RutaDetail({
   ruta,
   items,
   coords,
+  startPoint,
   canEdit,
 }: {
   ruta: Ruta;
   items: Item[];
   coords: Coords;
+  startPoint: { lat: number; lon: number; label?: string } | null;
   canEdit: boolean;
 }) {
   const router = useRouter();
@@ -171,6 +175,34 @@ export function RutaDetail({
             <span className="font-medium">Notas:</span> {ruta.notas}
           </div>
         )}
+      </div>
+
+      {/* Visor con ruta sugerida calculada por OSRM (carreteras reales) */}
+      <div className="bg-card border border-border rounded-lg overflow-hidden">
+        <div className="bg-muted px-4 py-2 font-medium text-sm flex items-center justify-between">
+          <span>Ruta sugerida</span>
+          <span className="text-xs text-muted-foreground font-normal">
+            Calculada por carretera vía OSRM · línea verde = recorrido
+            propuesto · marcador estrella ★ = punto de partida
+          </span>
+        </div>
+        <div className="h-[480px]">
+          <RutaSugeridaViewer
+            startPoint={startPoint}
+            puntos={items
+              .map((it) => {
+                const c = coords[it.codigo];
+                if (!c) return null;
+                return {
+                  codigo: it.codigo,
+                  lat: c.lat,
+                  lon: c.lng,
+                  visitado: it.visitado,
+                };
+              })
+              .filter((x): x is NonNullable<typeof x> => x !== null)}
+          />
+        </div>
       </div>
 
       <div className="bg-card border border-border rounded-lg overflow-hidden">

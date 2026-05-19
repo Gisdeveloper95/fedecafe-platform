@@ -25,6 +25,7 @@ export default async function RutaDetailPage({
       operarioId: schema.rutas.operarioId,
       operarioName: schema.users.fullName,
       notas: schema.rutas.notas,
+      startPointJson: schema.rutas.startPointJson,
       createdAt: schema.rutas.createdAt,
     })
     .from(schema.rutas)
@@ -74,12 +75,21 @@ export default async function RutaDetailPage({
     }
   }
 
+  const startPoint = ruta.startPointJson
+    ? (JSON.parse(ruta.startPointJson) as {
+        lat: number;
+        lon: number;
+        label?: string;
+      })
+    : null;
+
   return (
     <RutaDetail
       ruta={ruta}
       items={items}
       coords={coords}
-      canEdit={me.role === "admin"}
+      startPoint={startPoint}
+      canEdit={me.role === "admin" || me.role === "developer"}
     />
   );
 }
