@@ -49,7 +49,13 @@ export default async function RutasPage() {
           </p>
         </div>
         {me.role === "admin" && (
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <Link
+              href="/rutas/calendario"
+              className="border border-border rounded px-4 py-2 text-sm hover:bg-muted"
+            >
+              Calendario
+            </Link>
             <Link
               href="/rutas/nueva"
               className="border border-border rounded px-4 py-2 text-sm hover:bg-muted"

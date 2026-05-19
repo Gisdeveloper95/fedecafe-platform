@@ -5,6 +5,7 @@ import { db, schema } from "@/db/client";
 import { logAudit } from "@/lib/audit";
 import { json, jsonError, parseJson } from "@/lib/api/json";
 import { requireAdmin } from "@/lib/auth/principal";
+import { pushToUser } from "@/lib/push/fcm";
 
 const RejectRequest = z.object({
   reason: z.string().min(1).max(1000),
@@ -61,6 +62,18 @@ export async function POST(
     action: `capture.${newState}`,
     targetId: id,
     details: { reason: body.reason },
+  });
+
+  // Push notif al operario para que sepa que debe corregir o que ya no aplica
+  pushToUser(capture.operarioId, {
+    kind: body.needsInfo ? "captura_requiere_info" : "captura_rechazada",
+    title: body.needsInfo
+      ? "Captura necesita corrección"
+      : "Captura rechazada",
+    body: body.reason.slice(0, 120),
+    data: { captureId: id },
+  }).catch(() => {
+    /* no-op */
   });
 
   return json({ id, state: newState });

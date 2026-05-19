@@ -6,12 +6,14 @@ import { z } from "zod";
 import { db, schema } from "@/db/client";
 import { json, jsonError, parseJson } from "@/lib/api/json";
 import { requireAdmin, requirePrincipal } from "@/lib/auth/principal";
+import { pushToUser } from "@/lib/push/fcm";
 
 const CreateRutaRequest = z.object({
   nombre: z.string().min(1).max(200),
   tipo: z.enum(["medidores", "estructuras"]),
   operarioId: z.string().uuid(),
   codigos: z.array(z.string().min(1)).min(1).max(500),
+  fechaObjetivo: z.string().date().optional(),
   notas: z.string().max(1000).optional(),
 });
 
@@ -115,6 +117,7 @@ export async function POST(request: Request) {
     operarioId: body.operarioId,
     creadaPor: admin.userId,
     estado: "pendiente",
+    fechaObjetivo: body.fechaObjetivo ?? null,
     notas: body.notas,
     createdAt: now,
     updatedAt: now,
@@ -145,6 +148,18 @@ export async function POST(request: Request) {
     }),
   });
 
+  // Push al operario asignado
+  pushToUser(body.operarioId, {
+    kind: "ruta_asignada",
+    title: "Nueva ruta asignada",
+    body: `${body.nombre} · ${body.codigos.length} puntos${
+      body.fechaObjetivo ? " · " + body.fechaObjetivo : ""
+    }`,
+    data: { rutaId },
+  }).catch(() => {
+    /* no-op */
+  });
+
   return json(
     {
       ruta: {
@@ -152,6 +167,7 @@ export async function POST(request: Request) {
         nombre: body.nombre,
         tipo: body.tipo,
         operarioId: body.operarioId,
+        fechaObjetivo: body.fechaObjetivo,
         estado: "pendiente",
       },
       missingCodes: missing,

@@ -260,6 +260,35 @@ export const dataAssets = sqliteTable(
 );
 
 // ---------------------------------------------------------------------------
+// Push notifications: tokens por dispositivo
+// ---------------------------------------------------------------------------
+
+export const devicePushTokens = sqliteTable(
+  "device_push_tokens",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    platform: text("platform").notNull(), // "android" | "ios" | "web"
+    token: text("token").notNull().unique(),
+    deviceFingerprint: text("device_fingerprint"),
+    deviceName: text("device_name"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+    lastSeenAt: text("last_seen_at"),
+    disabled: integer("disabled", { mode: "boolean" })
+      .notNull()
+      .default(false),
+  },
+  (t) => [
+    index("idx_push_user").on(t.userId),
+    index("idx_push_token").on(t.token),
+  ],
+);
+
+// ---------------------------------------------------------------------------
 // Auditoría
 // ---------------------------------------------------------------------------
 
@@ -290,3 +319,5 @@ export type PendingCapture = typeof pendingCaptures.$inferSelect;
 export type NewPendingCapture = typeof pendingCaptures.$inferInsert;
 export type DataAsset = typeof dataAssets.$inferSelect;
 export type NewDataAsset = typeof dataAssets.$inferInsert;
+export type DevicePushToken = typeof devicePushTokens.$inferSelect;
+export type NewDevicePushToken = typeof devicePushTokens.$inferInsert;

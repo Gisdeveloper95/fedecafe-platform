@@ -24,6 +24,8 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   const [operarioId, setOperarioId] = useState(operarios[0]?.id ?? "");
   const [tipo, setTipo] = useState<"medidores" | "estructuras">("medidores");
   const [notas, setNotas] = useState("");
+  const [fechaObjetivo, setFechaObjetivo] = useState<string>("");
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
 
   // Filtro
   const [municipios, setMunicipios] = useState<Municipio[]>([]);
@@ -225,6 +227,26 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
     setSeleccion([]);
   }
 
+  function onDragStart(idx: number) {
+    setDragIdx(idx);
+  }
+
+  function onDragOver(e: React.DragEvent, idx: number) {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === idx) return;
+    setSeleccion((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(dragIdx, 1);
+      next.splice(idx, 0, moved);
+      return next;
+    });
+    setDragIdx(idx);
+  }
+
+  function onDragEnd() {
+    setDragIdx(null);
+  }
+
   /** TSP heurístico: vecino más cercano desde el primer punto seleccionado. */
   function optimizar() {
     if (seleccion.length < 3) return;
@@ -281,6 +303,7 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
           tipo,
           operarioId,
           codigos: seleccion.map((s) => s.codigo),
+          fechaObjetivo: fechaObjetivo || undefined,
           notas: notas || undefined,
         }),
       });
@@ -369,6 +392,17 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
               </option>
             ))}
           </select>
+          <label className="flex flex-col gap-1 text-xs">
+            <span className="text-muted-foreground">
+              Fecha objetivo (opcional)
+            </span>
+            <input
+              type="date"
+              value={fechaObjetivo}
+              onChange={(e) => setFechaObjetivo(e.target.value)}
+              className="border border-border rounded px-3 py-2 bg-background text-sm"
+            />
+          </label>
           <textarea
             placeholder="Notas (opcional)"
             rows={2}
@@ -412,8 +446,16 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
             {seleccion.map((p, i) => (
               <li
                 key={p.codigo}
-                className="flex items-center gap-2 text-xs bg-muted/50 rounded px-2 py-1.5"
+                draggable
+                onDragStart={() => onDragStart(i)}
+                onDragOver={(e) => onDragOver(e, i)}
+                onDragEnd={onDragEnd}
+                className={`flex items-center gap-2 text-xs bg-muted/50 rounded px-2 py-1.5 cursor-grab active:cursor-grabbing ${
+                  dragIdx === i ? "opacity-50" : ""
+                }`}
+                title="Arrastra para reordenar"
               >
+                <span className="text-muted-foreground select-none">⋮⋮</span>
                 <span className="font-bold text-brand min-w-[1.5rem]">
                   #{i + 1}
                 </span>

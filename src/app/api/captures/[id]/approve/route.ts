@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -5,6 +7,7 @@ import { db, schema } from "@/db/client";
 import { logAudit } from "@/lib/audit";
 import { json, jsonError } from "@/lib/api/json";
 import { requireAdmin } from "@/lib/auth/principal";
+import { pushToUser } from "@/lib/push/fcm";
 
 const ApproveRequest = z.object({
   notes: z.string().max(1000).optional(),
@@ -216,9 +219,28 @@ export async function POST(
       appliedTable = "audit_log";
       appliedId = capture.targetId;
     } else if (capture.opType === "report_anomaly") {
-      // Reporte de anomalía: por ahora solo queda registrado en audit, sin tabla aparte.
-      appliedTable = "audit_log";
-      appliedId = id;
+      // Insertar en estructura_anomalies con el payload del operario.
+      const anomalyId = randomUUID();
+      await db.insert(schema.estructuraAnomalies).values({
+        id: anomalyId,
+        targetType: (capture.targetType ?? "estructura") as
+          | "medidor"
+          | "estructura"
+          | "tuberia",
+        targetId: String(capture.targetId ?? payload.targetId ?? "(sin id)"),
+        severity:
+          (payload.severity as "info" | "warning" | "critical" | undefined) ??
+          "warning",
+        title: String(payload.title ?? "Anomalía reportada"),
+        description: payload.description ? String(payload.description) : null,
+        reportedBy: capture.operarioId,
+        gpsLat: capture.gpsLat ?? null,
+        gpsLon: capture.gpsLon ?? null,
+        attachmentsJson: capture.attachmentsJson,
+        sourceCaptureId: capture.id,
+      });
+      appliedTable = "estructura_anomalies";
+      appliedId = anomalyId;
     }
   } catch (err) {
     applyError = err instanceof Error ? err.message : String(err);
@@ -249,6 +271,17 @@ export async function POST(
   if (applyError) {
     return jsonError(applyError, 422, { captureId: id });
   }
+
+  // Push notif al operario que envió la captura (silencioso si FCM no está)
+  pushToUser(capture.operarioId, {
+    kind: "captura_aprobada",
+    title: "Captura aprobada",
+    body: `Tu ${humanOpType(capture.opType)} fue aprobada.`,
+    data: { captureId: id },
+  }).catch(() => {
+    /* no-op */
+  });
+
   return json({
     id,
     state: newState,
@@ -256,6 +289,29 @@ export async function POST(
     appliedToId: appliedId,
     appliedAt: now,
   });
+}
+
+function humanOpType(op: string): string {
+  switch (op) {
+    case "create_medidor":
+      return "captura de medidor nuevo";
+    case "update_medidor":
+      return "actualización de medidor";
+    case "create_estructura":
+      return "captura de estructura nueva";
+    case "update_estructura":
+      return "actualización de estructura";
+    case "create_tuberia":
+      return "captura de tubería nueva";
+    case "update_tuberia":
+      return "actualización de tubería";
+    case "capture_visit":
+      return "visita";
+    case "report_anomaly":
+      return "anomalía reportada";
+    default:
+      return "captura";
+  }
 }
 
 function safeParse<T = unknown>(s: string | null): T | null {

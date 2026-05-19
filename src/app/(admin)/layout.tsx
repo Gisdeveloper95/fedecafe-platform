@@ -33,11 +33,18 @@ export default async function AdminLayout({
       .where(eq(schema.pendingCaptures.state, "pending"));
     const pending = pendingRows[0]?.c ?? 0;
 
+    const anomaliesOpenRows = await db
+      .select({ c: count() })
+      .from(schema.estructuraAnomalies)
+      .where(eq(schema.estructuraAnomalies.state, "open"));
+    const anomaliesOpen = anomaliesOpenRows[0]?.c ?? 0;
+
     nav = [
       { href: "/dashboard", label: "Dashboard" },
       { href: "/usuarios", label: "Usuarios" },
       { href: "/demo-tokens", label: "Demos" },
       { href: "/revision", label: "Revisión", badge: pending },
+      { href: "/anomalias", label: "Anomalías", badge: anomaliesOpen },
       { href: "/medidores", label: "Medidores" },
       { href: "/estructuras", label: "Estructuras" },
       { href: "/rutas", label: "Rutas" },

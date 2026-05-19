@@ -9,6 +9,7 @@ import {
   getIdempotentResponse,
   storeIdempotentResponse,
 } from "@/lib/idempotency";
+import { pushToAdmins } from "@/lib/push/fcm";
 import { headObject, isR2Configured } from "@/lib/storage/r2";
 
 const OP_TYPES = [
@@ -151,6 +152,17 @@ export async function POST(request: Request) {
     scope: "captures",
     response,
   });
+
+  // Notif a admins de que hay una captura nueva por revisar
+  pushToAdmins({
+    kind: "captura_pendiente",
+    title: "Nueva captura por revisar",
+    body: `${body.opType} sobre ${body.targetType} ${body.targetId ?? "(nuevo)"}`,
+    data: { captureId: body.id, opType: body.opType },
+  }).catch(() => {
+    /* no-op */
+  });
+
   return json(response, { status: 201 });
 }
 

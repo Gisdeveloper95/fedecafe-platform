@@ -27,6 +27,8 @@ const EnvSchema = z.object({
   R2_BUCKET: z.string().optional(),
   R2_PUBLIC_BASE_URL: z.string().url().optional(),
   CAPTURES_PRESIGN_TTL_SEC: z.coerce.number().int().positive().default(3600),
+  FCM_SERVER_KEY: z.string().optional(),
+  CRON_SECRET: z.string().optional(),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
 

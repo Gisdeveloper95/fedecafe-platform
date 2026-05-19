@@ -115,6 +115,7 @@ export const rutas = sqliteTable(
     })
       .notNull()
       .default("pendiente"),
+    fechaObjetivo: text("fecha_objetivo"),
     notas: text("notas"),
     createdAt: text("created_at")
       .notNull()
@@ -123,7 +124,10 @@ export const rutas = sqliteTable(
       .notNull()
       .default(sql`(CURRENT_TIMESTAMP)`),
   },
-  (t) => [index("idx_rutas_operario").on(t.operarioId, t.estado)],
+  (t) => [
+    index("idx_rutas_operario").on(t.operarioId, t.estado),
+    index("idx_rutas_fecha").on(t.fechaObjetivo),
+  ],
 );
 
 export const rutaItems = sqliteTable(
@@ -183,6 +187,48 @@ export const recorridoPuntos = sqliteTable(
 // Tipos inferidos (water)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Anomalías reportadas en campo (visualmente dañado, sin acceso, etc.)
+// ---------------------------------------------------------------------------
+
+export const estructuraAnomalies = sqliteTable(
+  "estructura_anomalies",
+  {
+    id: text("id").primaryKey(),
+    targetType: text("target_type", {
+      enum: ["medidor", "estructura", "tuberia"],
+    }).notNull(),
+    targetId: text("target_id").notNull(),
+    severity: text("severity", { enum: ["info", "warning", "critical"] })
+      .notNull()
+      .default("info"),
+    title: text("title").notNull(),
+    description: text("description"),
+    reportedBy: text("reported_by")
+      .notNull()
+      .references(() => users.id),
+    reportedAt: text("reported_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+    gpsLat: real("gps_lat"),
+    gpsLon: real("gps_lon"),
+    attachmentsJson: text("attachments_json"),
+    state: text("state", {
+      enum: ["open", "in_progress", "resolved", "discarded"],
+    })
+      .notNull()
+      .default("open"),
+    resolvedBy: text("resolved_by").references(() => users.id),
+    resolvedAt: text("resolved_at"),
+    resolutionNotes: text("resolution_notes"),
+    sourceCaptureId: text("source_capture_id"),
+  },
+  (t) => [
+    index("idx_anomalies_state").on(t.state, t.reportedAt),
+    index("idx_anomalies_target").on(t.targetType, t.targetId),
+  ],
+);
+
 export type Medidor = typeof medidores.$inferSelect;
 export type Estructura = typeof estructuras.$inferSelect;
 export type Tuberia = typeof tuberias.$inferSelect;
@@ -190,3 +236,5 @@ export type Ruta = typeof rutas.$inferSelect;
 export type RutaItem = typeof rutaItems.$inferSelect;
 export type Recorrido = typeof recorridos.$inferSelect;
 export type RecorridoPunto = typeof recorridoPuntos.$inferSelect;
+export type EstructuraAnomaly = typeof estructuraAnomalies.$inferSelect;
+export type NewEstructuraAnomaly = typeof estructuraAnomalies.$inferInsert;
