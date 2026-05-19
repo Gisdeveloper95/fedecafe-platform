@@ -62,7 +62,7 @@ export default async function AdminLayout({
     <AdminUIProviders>
       <div className="min-h-screen flex flex-col">
         <header className="bg-brand text-brand-foreground shadow-sm">
-          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-8">
             <Link href="/dashboard" className="font-bold text-lg">
               Fedecafe Platform
@@ -94,7 +94,7 @@ export default async function AdminLayout({
         </div>
       </header>
         <main className="flex-1">
-          <div className="max-w-7xl mx-auto px-4 py-6">{children}</div>
+          <div className="px-6 py-6">{children}</div>
         </main>
       </div>
     </AdminUIProviders>

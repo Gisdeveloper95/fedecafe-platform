@@ -5,36 +5,25 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import type {
-  FeatureLine,
-  FeaturePoint,
   GisViewerHandlers,
   LayerSpec,
-  SelectedFeature,
 } from "./types";
-
-type MapLibreNS = typeof import("maplibre-gl");
 
 type Props = {
   layers: LayerSpec[];
-  /// Si true, los markers de capas tipo "points" son draggables (los nuevos
-  /// vértices reportan onPointMoved). Default: false.
+  /// Si true y hay un feature en `selectedFeatureIds`, ese marker se renderiza
+  /// como un DOM marker draggable. El resto se renderizan como capa de círculos
+  /// nativa (rápida para miles de puntos).
   editable?: boolean;
-  /// Si está definido, el visor muestra los IDs como "seleccionados" (marker
-  /// resaltado). Estructura: { [layerId]: Set<featureId> }
   selectedFeatureIds?: Record<string, Set<string>>;
-  /// Cómo encajar la vista inicial. "fit" centra y zooma a los features.
-  /// "fixed" usa el centro/zoom dados. Si no hay features, va a Colombia.
   initialView?:
     | { mode: "fit"; padding?: number }
     | { mode: "fixed"; lat: number; lon: number; zoom: number };
-  /// Toggle visibilidad de capas. Si no se pasa, se renderiza una barra interna
-  /// con switches por capa.
   showLayerToggle?: boolean;
-  /// Mostrar coordenadas del cursor abajo a la derecha (útil para edición)
   showCoords?: boolean;
 } & GisViewerHandlers;
 
-// MapLibre demo tile estilo OSM. Sin API key, gratis.
+// Estilo OSM raster (gratis, sin API key).
 const OSM_STYLE = {
   version: 8 as const,
   sources: {
@@ -65,21 +54,18 @@ export function GisViewer({
   onPointMoved,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<unknown>(null); // maplibregl.Map
-  const mlRef = useRef<MapLibreNS | null>(null);
-  const draggingMarkerRef = useRef<{
-    layerId: string;
-    featureId: string;
-  } | null>(null);
+  const mapRef = useRef<import("maplibre-gl").Map | null>(null);
+  const dragMarkersRef = useRef<Array<import("maplibre-gl").Marker>>([]);
+  const fittedRef = useRef(false);
+  const styleReadyRef = useRef(false);
 
-  // Estados de visibilidad por capa (controlado internamente)
+  // Estados de visibilidad por capa
   const [layerVis, setLayerVis] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     for (const l of layers) init[l.id] = l.visible ?? true;
     return init;
   });
 
-  // Resincronizar cuando llegan nuevas capas (ej: al cambiar entidad)
   useEffect(() => {
     setLayerVis((prev) => {
       const next = { ...prev };
@@ -95,13 +81,12 @@ export function GisViewer({
     lon: number;
   } | null>(null);
 
-  // -------- Inicialización del mapa (una sola vez) --------
+  // -------- Init del mapa (una sola vez) --------
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const maplibregl = (await import("maplibre-gl")).default;
       if (cancelled || !containerRef.current || mapRef.current) return;
-      mlRef.current = (await import("maplibre-gl")) as unknown as MapLibreNS;
 
       const map = new maplibregl.Map({
         container: containerRef.current,
@@ -116,13 +101,24 @@ export function GisViewer({
       map.addControl(new maplibregl.NavigationControl(), "top-right");
       map.addControl(new maplibregl.ScaleControl(), "bottom-left");
 
+      map.on("load", () => {
+        styleReadyRef.current = true;
+      });
+
+      // Click vacío del mapa (cuando no cae en ninguna capa nuestra)
       map.on("click", (e) => {
-        // Si el click cae sobre una capa, el handler de la capa ya lo manejó
-        // (los layers tienen prioridad por orden); aquí solo se llama si el
-        // click no cae sobre nada interactivo.
-        const target = e.originalEvent.target as HTMLElement | null;
-        if (target?.dataset?.featureClick === "true") return;
-        onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+        if (!mapRef.current) return;
+        // Si el click cae sobre una capa nuestra, el handler de la capa
+        // ya tomó el evento (registramos handlers por layer-id abajo).
+        const ourLayers = (map.getStyle().layers ?? [])
+          .map((l) => l.id)
+          .filter((id) => id.startsWith("gv-"));
+        const feats = map.queryRenderedFeatures(e.point, {
+          layers: ourLayers,
+        });
+        if (feats.length === 0) {
+          onMapClick?.({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+        }
       });
 
       if (showCoords) {
@@ -134,29 +130,26 @@ export function GisViewer({
     })();
     return () => {
       cancelled = true;
-      const m = mapRef.current as { remove?: () => void } | null;
-      m?.remove?.();
+      mapRef.current?.remove();
       mapRef.current = null;
+      styleReadyRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -------- Pintar capas cada vez que cambian --------
   useEffect(() => {
-    const map = mapRef.current as
-      | (import("maplibre-gl").Map & {
-          isStyleLoaded: () => boolean;
-        })
-      | null;
+    const map = mapRef.current;
     if (!map) return;
 
     const apply = async () => {
       const maplibregl = (await import("maplibre-gl")).default;
-      // Remover capas anteriores nuestras
+
+      // Limpiar layers/sources previas nuestras
       const style = map.getStyle();
-      const ourLayerIds = style.layers
-        ?.map((l) => l.id)
-        .filter((id) => id.startsWith("gv-")) ?? [];
+      const ourLayerIds = (style.layers ?? [])
+        .map((l) => l.id)
+        .filter((id) => id.startsWith("gv-"));
       for (const id of ourLayerIds) {
         if (map.getLayer(id)) map.removeLayer(id);
       }
@@ -167,62 +160,132 @@ export function GisViewer({
         if (map.getSource(id)) map.removeSource(id);
       }
 
-      // Cualquier marker DOM previo
-      // (los markers DOM no son layers; los manejamos en otro ref)
-      for (const m of markersRef.current) m.remove();
-      markersRef.current = [];
+      // Limpiar markers DOM previos (solo se usan para el seleccionado en modo edit)
+      for (const m of dragMarkersRef.current) m.remove();
+      dragMarkersRef.current = [];
 
       for (const layer of layers) {
         if (layerVis[layer.id] === false) continue;
-        if (layer.kind === "points") {
-          // Markers DOM para mejor interactividad (drag + click)
-          for (const f of layer.features) {
-            const selected =
-              selectedFeatureIds?.[layer.id]?.has(f.id) ?? false;
-            const el = document.createElement("div");
-            el.dataset.featureClick = "true";
-            el.style.cssText = `
-              width: ${selected ? 16 : 12}px;
-              height: ${selected ? 16 : 12}px;
-              border-radius: 50%;
-              background: ${selected ? layer.color : layer.color + "cc"};
-              border: ${selected ? "3px" : "2px"} solid white;
-              box-shadow: 0 1px 3px rgba(0,0,0,0.35);
-              cursor: ${editable ? "move" : "pointer"};
-            `;
-            const marker = new maplibregl.Marker({
-              element: el,
-              draggable: editable,
-            })
-              .setLngLat([f.lon, f.lat])
-              .addTo(map);
 
-            el.addEventListener("click", (e) => {
-              e.stopPropagation();
+        if (layer.kind === "points") {
+          // Capa nativa de círculos — escala a 100K+ puntos sin trabarse
+          const sourceId = `gv-${layer.id}-src`;
+          const layerCirclesId = `gv-${layer.id}-circles`;
+          const layerSelectedId = `gv-${layer.id}-selected`;
+
+          const selectedSet = selectedFeatureIds?.[layer.id];
+          const selectedIds = selectedSet ? Array.from(selectedSet) : [];
+          const editableSelected =
+            editable && selectedIds.length === 1 ? selectedIds[0] : null;
+
+          const featuresAsGeoJson: GeoJSON.FeatureCollection = {
+            type: "FeatureCollection",
+            features: layer.features
+              // En modo edit, sacamos el seleccionado del source para mostrarlo
+              // como DOM marker draggable arriba.
+              .filter((f) => f.id !== editableSelected)
+              .map((f) => ({
+                type: "Feature",
+                properties: {
+                  id: f.id,
+                  label: f.label ?? "",
+                  selected: selectedSet?.has(f.id) ? 1 : 0,
+                },
+                geometry: { type: "Point", coordinates: [f.lon, f.lat] },
+              })),
+          };
+
+          map.addSource(sourceId, {
+            type: "geojson",
+            data: featuresAsGeoJson,
+          });
+
+          // Círculos no seleccionados
+          map.addLayer({
+            id: layerCirclesId,
+            type: "circle",
+            source: sourceId,
+            filter: ["==", ["get", "selected"], 0],
+            paint: {
+              "circle-radius": 5,
+              "circle-color": layer.color,
+              "circle-opacity": 0.85,
+              "circle-stroke-width": 1.5,
+              "circle-stroke-color": "#ffffff",
+            },
+          });
+
+          // Círculos seleccionados (más grandes, contorno destacado)
+          map.addLayer({
+            id: layerSelectedId,
+            type: "circle",
+            source: sourceId,
+            filter: ["==", ["get", "selected"], 1],
+            paint: {
+              "circle-radius": 8,
+              "circle-color": layer.color,
+              "circle-opacity": 1,
+              "circle-stroke-width": 3,
+              "circle-stroke-color": "#ffffff",
+            },
+          });
+
+          // Click handlers para ambos sub-layers
+          const handleClick = (
+            e: import("maplibre-gl").MapMouseEvent & {
+              features?: GeoJSON.Feature[];
+            },
+          ) => {
+            const feat = e.features?.[0];
+            if (!feat) return;
+            const id = String(feat.properties?.id ?? "");
+            const found = layer.features.find((x) => x.id === id);
+            if (found) {
               onFeatureClick?.({
                 layerId: layer.id,
-                feature: f,
+                feature: found,
                 kind: "point",
               });
-            });
+            }
+          };
+          map.on("click", layerCirclesId, handleClick);
+          map.on("click", layerSelectedId, handleClick);
+          map.on("mouseenter", layerCirclesId, () => {
+            map.getCanvas().style.cursor = "pointer";
+          });
+          map.on("mouseleave", layerCirclesId, () => {
+            map.getCanvas().style.cursor = "";
+          });
 
-            if (editable && onPointMoved) {
-              marker.on("dragstart", () => {
-                draggingMarkerRef.current = {
-                  layerId: layer.id,
-                  featureId: f.id,
-                };
-              });
+          // DOM marker draggable para el seleccionado en modo edit
+          if (editableSelected) {
+            const feat = layer.features.find((f) => f.id === editableSelected);
+            if (feat) {
+              const el = document.createElement("div");
+              el.style.cssText = `
+                width: 22px;
+                height: 22px;
+                border-radius: 50%;
+                background: ${layer.color};
+                border: 3px solid white;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+                cursor: move;
+              `;
+              const marker = new maplibregl.Marker({
+                element: el,
+                draggable: true,
+              })
+                .setLngLat([feat.lon, feat.lat])
+                .addTo(map);
               marker.on("dragend", () => {
                 const lngLat = marker.getLngLat();
-                onPointMoved(layer.id, f.id, {
+                onPointMoved?.(layer.id, feat.id, {
                   lat: lngLat.lat,
                   lon: lngLat.lng,
                 });
-                draggingMarkerRef.current = null;
               });
+              dragMarkersRef.current.push(marker);
             }
-            markersRef.current.push(marker);
           }
         } else if (layer.kind === "lines") {
           const sourceId = `gv-${layer.id}-src`;
@@ -242,7 +305,10 @@ export function GisViewer({
               },
             })),
           };
-          map.addSource(sourceId, { type: "geojson", data: featureCollection });
+          map.addSource(sourceId, {
+            type: "geojson",
+            data: featureCollection,
+          });
           map.addLayer({
             id: layerId,
             type: "line",
@@ -275,7 +341,7 @@ export function GisViewer({
         }
       }
 
-      // Auto-fit a las features visibles si no se pidió vista fija
+      // Auto-fit a las features visibles (solo la primera vez)
       if (initialView.mode === "fit" && !fittedRef.current) {
         const lngLats: [number, number][] = [];
         for (const layer of layers) {
@@ -316,7 +382,7 @@ export function GisViewer({
       }
     };
 
-    if (map.isStyleLoaded()) {
+    if (styleReadyRef.current && map.isStyleLoaded()) {
       apply();
     } else {
       map.once("load", apply);
@@ -331,9 +397,6 @@ export function GisViewer({
     selectedFeatureIds,
   ]);
 
-  const markersRef = useRef<Array<import("maplibre-gl").Marker>>([]);
-  const fittedRef = useRef(false);
-
   const totalsByLayer = useMemo(() => {
     const t: Record<string, number> = {};
     for (const l of layers) t[l.id] = l.features.length;
@@ -345,7 +408,7 @@ export function GisViewer({
       <div ref={containerRef} className="absolute inset-0" />
 
       {showLayerToggle && layers.length > 0 && (
-        <div className="absolute top-2 left-2 bg-card/95 backdrop-blur rounded shadow border border-border p-2 text-xs space-y-1 z-10">
+        <div className="absolute top-2 left-2 bg-card/95 backdrop-blur rounded shadow border border-border p-2 text-xs space-y-1 z-10 max-h-[60%] overflow-auto">
           {layers.map((l) => (
             <label
               key={l.id}
