@@ -32,7 +32,9 @@ export async function GET(request: Request) {
     );
   }
   if (municipio) {
-    where.push(sql`${schema.medidores.municipio} = ${municipio}`);
+    where.push(
+      sql`LOWER(TRIM(${schema.medidores.municipio})) = LOWER(TRIM(${municipio}))`,
+    );
   }
   if (since) {
     // Sync delta: solo registros modificados después de este timestamp

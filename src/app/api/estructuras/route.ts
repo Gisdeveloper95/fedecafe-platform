@@ -36,7 +36,10 @@ export async function GET(request: Request) {
     where.push(sql`${schema.estructuras.layerName} = ${layer}`);
   }
   if (municipio) {
-    where.push(sql`${schema.estructuras.municipio} = ${municipio}`);
+    // Match tolerante a espacios y mayúsculas/minúsculas
+    where.push(
+      sql`LOWER(TRIM(${schema.estructuras.municipio})) = LOWER(TRIM(${municipio}))`,
+    );
   }
   if (since) {
     where.push(gt(schema.estructuras.updatedAt, since));

@@ -49,12 +49,20 @@ export default async function RutasPage() {
           </p>
         </div>
         {me.role === "admin" && (
-          <Link
-            href="/rutas/nueva"
-            className="bg-brand text-brand-foreground rounded px-4 py-2 text-sm hover:opacity-90"
-          >
-            + Crear ruta
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href="/rutas/nueva"
+              className="border border-border rounded px-4 py-2 text-sm hover:bg-muted"
+            >
+              Crear por códigos
+            </Link>
+            <Link
+              href="/rutas/planeador"
+              className="bg-brand text-brand-foreground rounded px-4 py-2 text-sm hover:opacity-90"
+            >
+              + Planeador con mapa
+            </Link>
+          </div>
         )}
       </div>
 
