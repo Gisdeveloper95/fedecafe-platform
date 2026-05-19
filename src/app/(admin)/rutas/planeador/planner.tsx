@@ -92,6 +92,11 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   // teclea el código y los resultados aparecen abajo con un botón para agregar.
   const [search, setSearch] = useState("");
 
+  // Total de medidores/estructuras en la BD (no los cargados en mapa). Sirve
+  // para mostrar al usuario "hay 8614 medidores disponibles" aunque no
+  // estén pintados todos.
+  const [totalInDb, setTotalInDb] = useState<number | null>(null);
+
   const [startPoint, setStartPoint] = useState<StartPoint | null>(null);
   const [stops, setStops] = useState<StopItem[]>([]);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -125,6 +130,20 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   // mapa, NO los stops ya seleccionados). Útil para limpiar el mapa cuando hay
   // miles de puntos y solo quieres ver lo que ya armaste.
   const [showRefLayer, setShowRefLayer] = useState(true);
+
+  // Una sola llamada al cambiar `tipo` para conocer cuántos hay en total en la
+  // BD. Necesario para mostrar al usuario "X medidores disponibles" sin tener
+  // que cargarlos todos en el mapa.
+  useEffect(() => {
+    const endpoint =
+      tipo === "medidores" ? "/api/medidores" : "/api/estructuras";
+    fetch(`${endpoint}?limit=1`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (typeof d.totalInDb === "number") setTotalInDb(d.totalInDb);
+      })
+      .catch(() => {});
+  }, [tipo]);
 
   // Init map
   useEffect(() => {
@@ -224,6 +243,7 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
             }),
           );
           setPuntos(items);
+          if (typeof d.totalInDb === "number") setTotalInDb(d.totalInDb);
           setLoadingPoints(false);
         })
         .catch(() => setLoadingPoints(false));
@@ -706,7 +726,14 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
               onChange={(e) => setShowRefLayer(e.target.checked)}
             />
             <span>
-              Mostrar capa de referencia ({puntos.length} {tipo}) en el mapa
+              Mostrar capa de referencia (
+              {puntos.length} cargados
+              {totalInDb !== null && (
+                <span className="text-muted-foreground">
+                  {" "}· {totalInDb.toLocaleString("es-CO")} total {tipo}
+                </span>
+              )}
+              ) en el mapa
             </span>
           </label>
           <label className="flex flex-col gap-1 text-xs">

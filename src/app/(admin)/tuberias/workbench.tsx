@@ -4,7 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { GisViewer } from "@/components/gis/gis-viewer";
 import { PhotoGallery } from "@/components/gis/photo-gallery";
-import type { FeatureLine, SelectedFeature } from "@/components/gis/types";
+import type {
+  FeatureLine,
+  FeaturePoint,
+  LayerSpec,
+  SelectedFeature,
+} from "@/components/gis/types";
 import { useDialog } from "@/components/ui/modal";
 import { useToast } from "@/components/ui/toast";
 
@@ -125,8 +130,12 @@ export function TuberiasWorkbench() {
     );
   }, [tuberias, materialSel, diametroSel]);
 
-  // Agrupar por material para tener varias capas de colores
-  const layers = useMemo(() => {
+  // Agrupar por material. Para cada material se generan HASTA 2 capas:
+  //  - Líneas (cuando hay geometry_json válido)
+  //  - Puntos en centroide (fallback cuando no hay geometría — caso actual
+  //    en producción: las 234 tuberías sincronizadas no tienen LineString
+  //    todavía, solo centroide).
+  const layers = useMemo<LayerSpec[]>(() => {
     const byMaterial = new Map<string, Tuberia[]>();
     for (const t of filteredTuberias) {
       const m = (t.material ?? "—").trim() || "—";
@@ -134,34 +143,67 @@ export function TuberiasWorkbench() {
       arr.push(t);
       byMaterial.set(m, arr);
     }
-    return Array.from(byMaterial.entries()).map(([material, items]) => {
-      const features: FeatureLine[] = [];
+    const result: LayerSpec[] = [];
+    for (const [material, items] of byMaterial.entries()) {
+      const lines: FeatureLine[] = [];
+      const points: FeaturePoint[] = [];
       for (const t of items) {
         const vertices = parseGeometry(t.geometryJson);
         if (vertices && vertices.length >= 2) {
-          features.push({
+          lines.push({
             id: t.codigo,
             vertices,
             label: t.codigo,
             category: material,
           });
+        } else if (t.centroidLat != null && t.centroidLon != null) {
+          points.push({
+            id: t.codigo,
+            lat: t.centroidLat,
+            lon: t.centroidLon,
+            label: t.codigo,
+            category: material,
+          });
         }
       }
-      return {
-        kind: "lines" as const,
-        id: `material-${material}`,
-        label: `${material} (${items.length})`,
-        color: colorFor(material),
-        width: 4,
-        features,
-      };
-    });
+      if (lines.length > 0) {
+        result.push({
+          kind: "lines",
+          id: `material-${material}`,
+          label: `${material}${
+            points.length > 0
+              ? ` · ${lines.length} líneas + ${points.length} pts`
+              : ` (${lines.length})`
+          }`,
+          color: colorFor(material),
+          width: 4,
+          features: lines,
+        });
+      }
+      if (points.length > 0) {
+        result.push({
+          kind: "points",
+          id: `material-${material}-pts`,
+          label:
+            lines.length > 0
+              ? `${material} (centroide)`
+              : `${material} (${points.length} centroides)`,
+          color: colorFor(material),
+          features: points,
+        });
+      }
+    }
+    return result;
   }, [filteredTuberias]);
 
   const selectedFeatureIds = useMemo(() => {
     if (!selected) return undefined;
     const mat = (selected.material ?? "—").trim() || "—";
-    return { [`material-${mat}`]: new Set([selected.codigo]) };
+    // Resaltamos en ambas capas posibles — la que esté visible aplicará
+    return {
+      [`material-${mat}`]: new Set([selected.codigo]),
+      [`material-${mat}-pts`]: new Set([selected.codigo]),
+    };
   }, [selected]);
 
   const handleFeatureClick = useCallback(
