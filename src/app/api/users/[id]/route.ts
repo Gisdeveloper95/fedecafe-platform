@@ -9,12 +9,32 @@ import { requireAdmin } from "@/lib/auth/principal";
 const UpdateUserRequest = z
   .object({
     fullName: z.string().min(2).max(120).optional(),
+    /// "developer" no se acepta vía API; solo se crea por seed script
     role: z.enum(["admin", "operario"]).optional(),
     email: z.string().email().nullable().optional(),
     status: z.enum(["active", "suspended", "deleted"]).optional(),
     accessExpiresAt: z.string().datetime().nullable().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: "empty_payload" });
+
+/// Verifica que el target NO sea developer, salvo que el caller también lo sea.
+/// El rol developer es inmutable desde admin: no se puede suspender, borrar,
+/// editar ni cambiar password. Solo otro developer puede modificarlo.
+async function ensureCanMutateTarget(
+  callerRole: string,
+  targetId: string,
+): Promise<Response | null> {
+  if (callerRole === "developer") return null;
+  const rows = await db
+    .select({ role: schema.users.role })
+    .from(schema.users)
+    .where(eq(schema.users.id, targetId))
+    .limit(1);
+  if (rows[0]?.role === "developer") {
+    return jsonError("cannot_modify_developer", 403);
+  }
+  return null;
+}
 
 export async function GET(
   request: Request,
@@ -84,6 +104,9 @@ export async function PATCH(
     return jsonError("cannot_modify_self_critical_fields", 400);
   }
 
+  const blocked = await ensureCanMutateTarget(admin.role, id);
+  if (blocked) return blocked;
+
   const existing = await db
     .select({ id: schema.users.id })
     .from(schema.users)
@@ -143,6 +166,9 @@ export async function DELETE(
   if (id === admin.userId) {
     return jsonError("cannot_delete_self", 400);
   }
+
+  const blocked = await ensureCanMutateTarget(admin.role, id);
+  if (blocked) return blocked;
 
   const existing = await db
     .select({ id: schema.users.id })

@@ -132,6 +132,29 @@ export const rutas = sqliteTable(
   ],
 );
 
+/// Tabla N:N de asignación de rutas a operarios. Una ruta puede tener varios
+/// operarios (cuadrilla, parejas en campo). `rutas.operarioId` se mantiene como
+/// "líder/creador originalmente asignado" por compat, pero el filtro de
+/// visibilidad usa esta tabla.
+export const rutaAssignees = sqliteTable(
+  "ruta_assignees",
+  {
+    rutaId: text("ruta_id")
+      .notNull()
+      .references(() => rutas.id, { onDelete: "cascade" }),
+    operarioId: text("operario_id")
+      .notNull()
+      .references(() => users.id),
+    asignadoAt: text("asignado_at")
+      .notNull()
+      .default(sql`(CURRENT_TIMESTAMP)`),
+  },
+  (t) => [
+    primaryKey({ columns: [t.rutaId, t.operarioId] }),
+    index("idx_ruta_assignees_operario").on(t.operarioId),
+  ],
+);
+
 export const rutaItems = sqliteTable(
   "ruta_items",
   {
@@ -277,6 +300,8 @@ export type Medidor = typeof medidores.$inferSelect;
 export type Estructura = typeof estructuras.$inferSelect;
 export type Tuberia = typeof tuberias.$inferSelect;
 export type Ruta = typeof rutas.$inferSelect;
+export type RutaAssignee = typeof rutaAssignees.$inferSelect;
+export type NewRutaAssignee = typeof rutaAssignees.$inferInsert;
 export type RutaItem = typeof rutaItems.$inferSelect;
 export type Recorrido = typeof recorridos.$inferSelect;
 export type RecorridoPunto = typeof recorridoPuntos.$inferSelect;

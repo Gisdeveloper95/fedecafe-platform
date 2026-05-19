@@ -12,7 +12,7 @@ export type WebSessionUser = {
   id: string;
   username: string;
   fullName: string;
-  role: "admin" | "operario";
+  role: "admin" | "operario" | "developer";
   status: "active" | "suspended" | "deleted";
   accountType: "regular" | "demo";
   accessExpiresAt: string | null;
@@ -87,7 +87,7 @@ export async function getWebSessionUser(): Promise<WebSessionUser | null> {
     id: row.id,
     username: row.username,
     fullName: row.fullName,
-    role: row.role as "admin" | "operario",
+    role: row.role as WebSessionUser["role"],
     status: row.status as "active" | "suspended" | "deleted",
     accountType: (row.accountType as "regular" | "demo") ?? "regular",
     accessExpiresAt: row.accessExpiresAt ?? null,
@@ -95,9 +95,14 @@ export async function getWebSessionUser(): Promise<WebSessionUser | null> {
   };
 }
 
+/// Permite admin Y developer. Developer es admin-plus.
 export async function requireAdmin(): Promise<WebSessionUser> {
   const user = await getWebSessionUser();
-  if (!user || user.role !== "admin" || user.status !== "active") {
+  if (
+    !user ||
+    (user.role !== "admin" && user.role !== "developer") ||
+    user.status !== "active"
+  ) {
     throw new Response("Unauthorized", { status: 401 });
   }
   return user;

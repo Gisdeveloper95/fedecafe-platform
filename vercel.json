@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/cleanup-r2",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/cleanup-recorridos",
+      "schedule": "0 5 1 * *"
     }
   ]
 }

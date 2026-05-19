@@ -38,8 +38,9 @@ function generateTempPassword(): string {
 }
 
 export async function GET(request: Request) {
+  let caller;
   try {
-    await requireAdmin(request);
+    caller = await requireAdmin(request);
   } catch (err) {
     if (err instanceof Response) return err;
     throw err;
@@ -58,6 +59,10 @@ export async function GET(request: Request) {
     where.push(eq(schema.users.status, status));
   } else if (!includeDeleted) {
     where.push(ne(schema.users.status, "deleted"));
+  }
+  // Solo developer ve developers. Para admin normal el rol está oculto.
+  if (caller.role !== "developer") {
+    where.push(ne(schema.users.role, "developer"));
   }
 
   const rows = await db

@@ -73,7 +73,9 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
   const toast = useToast();
 
   const [nombre, setNombre] = useState("");
-  const [operarioId, setOperarioId] = useState(operarios[0]?.id ?? "");
+  const [operarioIds, setOperarioIds] = useState<string[]>(
+    operarios[0] ? [operarios[0].id] : [],
+  );
   const [tipo, setTipo] = useState<"medidores" | "estructuras">("medidores");
   const [notas, setNotas] = useState("");
   const [fechaObjetivo, setFechaObjetivo] = useState<string>("");
@@ -85,6 +87,10 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
 
   const [puntos, setPuntos] = useState<EntityPunto[]>([]);
   const [loadingPoints, setLoadingPoints] = useState(false);
+
+  // Búsqueda de entidades por código/nombre. Es el flujo principal: el usuario
+  // teclea el código y los resultados aparecen abajo con un botón para agregar.
+  const [search, setSearch] = useState("");
 
   const [startPoint, setStartPoint] = useState<StartPoint | null>(null);
   const [stops, setStops] = useState<StopItem[]>([]);
@@ -457,10 +463,15 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
     }
     setSubmitting(true);
     try {
+      if (operarioIds.length === 0) {
+        toast.error("Asigna al menos un operario");
+        setSubmitting(false);
+        return;
+      }
       const payload = {
         nombre,
         tipo,
-        operarioId,
+        operarioIds,
         items: stops.map((s) =>
           s.kind === "entity"
             ? { kind: "entity" as const, codigo: s.codigo }
@@ -578,28 +589,64 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
             onChange={(e) => setNombre(e.target.value)}
             className="border border-border rounded px-3 py-2 bg-background text-sm"
           />
-          <div className="grid grid-cols-2 gap-2">
+          <select
+            value={tipo}
+            onChange={(e) => {
+              setTipo(e.target.value as typeof tipo);
+              setStops((prev) => prev.filter((s) => s.kind === "waypoint"));
+            }}
+            className="border border-border rounded px-2 py-2 bg-background text-sm"
+          >
+            <option value="medidores">Medidores</option>
+            <option value="estructuras">Estructuras</option>
+          </select>
+          {/* Multi-asignación: chips de operarios + selector para agregar */}
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs text-muted-foreground">
+              Asignar a {operarioIds.length > 1 && `(${operarioIds.length} operarios — cuadrilla)`}
+            </label>
+            <div className="flex flex-wrap gap-1 min-h-[28px]">
+              {operarioIds.map((oid) => {
+                const op = operarios.find((o) => o.id === oid);
+                if (!op) return null;
+                return (
+                  <span
+                    key={oid}
+                    className="inline-flex items-center gap-1 bg-brand-soft text-brand text-xs rounded-full px-2 py-0.5 border border-brand/20"
+                  >
+                    {op.fullName}
+                    <button
+                      onClick={() =>
+                        setOperarioIds((prev) => prev.filter((id) => id !== oid))
+                      }
+                      className="hover:bg-red-100 rounded-full px-1"
+                      title="Quitar"
+                    >
+                      ✕
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
             <select
-              value={tipo}
+              value=""
               onChange={(e) => {
-                setTipo(e.target.value as typeof tipo);
-                setStops((prev) => prev.filter((s) => s.kind === "waypoint"));
+                const v = e.target.value;
+                if (v && !operarioIds.includes(v)) {
+                  setOperarioIds((prev) => [...prev, v]);
+                }
+                e.target.value = "";
               }}
               className="border border-border rounded px-2 py-2 bg-background text-sm"
             >
-              <option value="medidores">Medidores</option>
-              <option value="estructuras">Estructuras</option>
-            </select>
-            <select
-              value={operarioId}
-              onChange={(e) => setOperarioId(e.target.value)}
-              className="border border-border rounded px-2 py-2 bg-background text-sm"
-            >
-              {operarios.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.fullName}
-                </option>
-              ))}
+              <option value="">+ Agregar operario...</option>
+              {operarios
+                .filter((o) => !operarioIds.includes(o.id))
+                .map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.fullName}
+                  </option>
+                ))}
             </select>
           </div>
           <select
@@ -701,6 +748,64 @@ export function RoutePlanner({ operarios }: { operarios: Operario[] }) {
               </div>
             </div>
           )}
+        </div>
+
+        <div className="border-t border-border pt-3 flex flex-col gap-2">
+          <h3 className="font-semibold text-sm">
+            🔍 Agregar {tipo === "medidores" ? "medidores" : "estructuras"} por código
+          </h3>
+          <input
+            type="search"
+            placeholder={`Ej: ${tipo === "medidores" ? "CTR-3015" : "TQ-001"} o nombre del usuario`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="border border-border rounded px-3 py-2 bg-background text-sm"
+            autoFocus={stops.length === 0}
+          />
+          {search.trim().length > 0 && (
+            <div className="border border-border rounded bg-background max-h-44 overflow-auto text-xs">
+              {(() => {
+                const q = search.trim().toLowerCase();
+                const results = puntos
+                  .filter((p) => {
+                    if (stopCodes.has(p.codigo)) return false;
+                    return (
+                      p.codigo.toLowerCase().includes(q) ||
+                      (p.nombre ?? "").toLowerCase().includes(q)
+                    );
+                  })
+                  .slice(0, 50);
+                if (results.length === 0) {
+                  return (
+                    <div className="px-3 py-2 text-muted-foreground">
+                      Sin resultados.
+                    </div>
+                  );
+                }
+                return results.map((p) => (
+                  <button
+                    key={p.codigo}
+                    onClick={() => {
+                      toggleStop(p);
+                      // El user típicamente sigue buscando; no limpio search.
+                    }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-muted flex items-center justify-between border-b border-border last:border-b-0"
+                  >
+                    <span className="font-mono">{p.codigo}</span>
+                    <span className="text-muted-foreground truncate ml-2">
+                      {p.nombre ?? ""}
+                    </span>
+                    <span className="ml-2 text-brand font-bold">＋</span>
+                  </button>
+                ));
+              })()}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Tip: también puedes hacer click directo en los puntos del mapa, o
+            usar &quot;+ Parada intermedia&quot; arriba para un sitio que no está
+            en la base.
+          </p>
         </div>
 
         <div className="border-t border-border pt-3 flex-1 min-h-0">

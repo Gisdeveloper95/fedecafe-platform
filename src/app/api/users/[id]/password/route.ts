@@ -28,7 +28,7 @@ export async function POST(
 
   const { id } = await ctx.params;
   const isSelf = principal.userId === id;
-  const isAdmin = principal.role === "admin";
+  const isAdmin = principal.role === "admin" || principal.role === "developer";
 
   if (!isSelf && !isAdmin) return jsonError("forbidden", 403);
 
@@ -48,6 +48,11 @@ export async function POST(
   const user = rows[0];
   if (!user) return jsonError("not_found", 404);
   if (user.status === "deleted") return jsonError("not_found", 404);
+
+  // Inmunidad: solo otro developer puede cambiar password a un developer
+  if (user.role === "developer" && principal.role !== "developer" && !isSelf) {
+    return jsonError("cannot_modify_developer", 403);
+  }
 
   // Si es self change, debe proveer currentPassword y debe coincidir
   if (isSelf) {

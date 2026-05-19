@@ -51,14 +51,23 @@ export async function setGlobalLockdown(
 
 // Determina si una cuenta de usuario puede operar en este momento.
 // No bloquea por estado del JWT (eso es responsabilidad del verify), solo por estado de cuenta y lockdown.
+//
+// El rol "developer" tiene inmunidad TOTAL: ignora suspensión, expiración,
+// lockdown global, etc. Es una red de seguridad de último recurso si los
+// admins se bloquean entre sí o si el lockdown deja a todos afuera.
 export function describeAccountBlock(args: {
   status: "active" | "suspended" | "deleted" | string;
   accountType?: "regular" | "demo" | string;
   accessExpiresAt?: string | null;
   globalLockdown?: boolean;
   bypassLockdownForAdmin?: boolean;
-  role?: "admin" | "operario" | string;
+  role?: "admin" | "operario" | "developer" | string;
 }): { allowed: true } | { allowed: false; reason: string } {
+  // Inmunidad total para developer — única excepción es "deleted" (que igual no
+  // debería poder pasarle a este rol por la protección en endpoints).
+  if (args.role === "developer" && args.status !== "deleted") {
+    return { allowed: true };
+  }
   if (args.status === "deleted") {
     return { allowed: false, reason: "user_deleted" };
   }

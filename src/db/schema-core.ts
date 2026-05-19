@@ -30,7 +30,7 @@ export const users = sqliteTable(
     passwordHash: text("password_hash").notNull(),
     fullName: text("full_name").notNull(),
     email: text("email"),
-    role: text("role", { enum: ["admin", "operario"] }).notNull(),
+    role: text("role", { enum: ["admin", "operario", "developer"] }).notNull(),
     status: text("status", {
       enum: ["active", "suspended", "deleted"],
     })

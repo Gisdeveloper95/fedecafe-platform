@@ -45,6 +45,9 @@ export async function POST(
   if (user.status === "deleted") {
     return jsonError("cannot_reset_deleted_user", 400);
   }
+  if (user.role === "developer" && admin.role !== "developer") {
+    return jsonError("cannot_modify_developer", 403);
+  }
 
   const rawToken = randomBytes(32).toString("base64url");
   const tokenHash = hashToken(rawToken);
